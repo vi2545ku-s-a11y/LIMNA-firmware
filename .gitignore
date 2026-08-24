@@ -1,0 +1,32 @@
+# Lokal buffert. Motsvarar SD-kortet i bojen.
+buffer.db
+buffer.db-journal
+
+# Skapas automatiskt vid forsta korning och innehaller lokala installningar.
+config.json
+faults.json
+
+# Hemligheter (K-02). Losenord och token hor hemma i miljovariabler, inte i
+# filer -- och absolut inte i versionshantering.
+.env
+*.pem
+*.key
+*.crt
+
+# Lokala verktygsinstallningar. Innehaller bland annat godkanda kommandon,
+# och dar har InfluxDB-token hunnit hamna i en curl-rad.
+.claude/settings.local.json
+
+# Korningsutdata fran simulatorn och pollaren. Aterskapas vid varje korning
+# och sager ingenting om koden, bara om den senaste korningen.
+poll.log
+sim.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store

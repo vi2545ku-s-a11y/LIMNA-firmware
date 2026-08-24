@@ -1,0 +1,28 @@
+# LIMNA - pinnade versioner.
+#
+#   pip install -r requirements.txt
+#
+# Versionerna ar last med avsikt. pymodbus API andras kraftigt mellan
+# utgavor: i 3.9 och senare heter ModbusSlaveContext ModbusDeviceContext,
+# argumentet slave= heter device_id=, och hela datastore-lagret ar ersatt
+# av SimData/SimDevice. Koden i fake_sensors.py ar skriven mot 3.8-API:et.
+#
+# Testad pa Python 3.14.2, macOS 26.6 (Apple Silicon).
+#
+# Stod tidigare som macOS 12.7.5. Maskinen uppgraderades 2026-07-28 just for
+# att komma forbi den versionen -- Docker Desktop kravde macOS 13. Se etapp 0
+# i etapper.md.
+#
+# Uppgradera inte utan att kora alla tre sjalvtesterna efterat:
+#   python3 sensor_profiles.py --selftest
+#   python3 fake_sensors.py --selftest
+#   python3 poller.py --selftest
+
+pymodbus==3.8.6
+paho-mqtt==2.1.0
+
+# pyserial anvands bara av RTU-vagen, alltsa av riktiga givare over RS485.
+# pymodbus drar inte in den sjalv: den ar valfri anda tills nagon satter
+# "transport": "rtu" i config.json, och da kravs den. Laptopkorningen med
+# simulatorn gar over TCP och ror den aldrig.
+pyserial==3.5

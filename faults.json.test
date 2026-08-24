@@ -1,0 +1,1 @@
+{"_comment": "Edit while running. Re-read on every request.", "sensor_1_do": "ok", "sensor_2_turb": "offline", "sensor_3_ec": "ok", "sensor_4_ph": "ok", "sensor_5_lvl": "ok", "_states": "ok | offline | stuck | noisy | drift", "rain_event": false, "oxygen_decline": false}

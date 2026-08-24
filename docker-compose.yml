@@ -1,0 +1,96 @@
+# LIMNA - dataplattform for utveckling
+#
+#   cp .env.example .env      forsta gangen: hemligheterna hamnar dar
+#   docker compose up -d      starta allt
+#   docker compose logs -f    folj loggarna
+#   docker compose down       stoppa
+#   docker compose down -v    stoppa OCH radera all data
+#
+# Losenord och token star INTE i den har filen. De laser Compose ur .env,
+# som .gitignore utesluter. Token behovdes tidigare pa tre stallen -- har, i
+# telegraf.conf och i Grafanas provisioning-fil -- och att halla tre kopior
+# i takt for hand ar en felkalla som inte behover finnas.
+#
+# Fyra tjanster:
+#   mosquitto  tar emot matningar fran bojen over MQTT
+#   telegraf   lyssnar pa MQTT och skriver till databasen
+#   influxdb   tidsseriedatabas
+#   grafana    dashboard i webblasaren
+
+services:
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: limna-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      # mosquitto.conf sager persistence true, sa /mosquitto/data maste
+      # ligga i en volym. Utan den forsvinner kon nar containern byts ut.
+      - mosquitto-data:/mosquitto/data
+    restart: unless-stopped
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: limna-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_USERNAME}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET}
+      DOCKER_INFLUXDB_INIT_RETENTION: 0
+      # Setup kors bara EN gang, vid forsta starten. Byter du token harefter
+      # maste volymen bort ocksa: docker compose down -v
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN}
+    volumes:
+      - influx-data:/var/lib/influxdb2
+    restart: unless-stopped
+
+  telegraf:
+    image: telegraf:1.30
+    container_name: limna-telegraf
+    depends_on:
+      - mosquitto
+      - influxdb
+    environment:
+      # Telegraf expanderar ${...} i sin egen konfigurationsfil, sa token
+      # skickas in hit i stallet for att skrivas i telegraf.conf.
+      INFLUX_TOKEN: ${INFLUX_TOKEN}
+      INFLUX_ORG: ${INFLUX_ORG}
+      INFLUX_BUCKET: ${INFLUX_BUCKET}
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: limna-grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - influxdb
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Provisioning-filen for datakallan expanderar $INFLUX_TOKEN, sa den
+      # behover inte innehalla token sjalv.
+      INFLUX_TOKEN: ${INFLUX_TOKEN}
+      INFLUX_ORG: ${INFLUX_ORG}
+      INFLUX_BUCKET: ${INFLUX_BUCKET}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      # Datakallan och dashboarden laggs in automatiskt vid start, sa
+      # etapp 2 i README inte kraver nagot klickande.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+
+volumes:
+  influx-data:
+  grafana-data:
+  mosquitto-data:

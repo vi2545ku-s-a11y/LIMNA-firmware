@@ -1,0 +1,24 @@
+# Lagger in InfluxDB som datakalla automatiskt nar Grafana startar.
+# Ersatter handpahittet i etapp 2 i README.
+#
+# Token star inte har utan i .env. Grafana expanderar $INFLUX_TOKEN ur sin
+# miljo nar provisioning lases, och docker-compose.yml skickar in vardet.
+# Tidigare stod samma token pa tre stallen -- har, i telegraf.conf och i
+# docker-compose.yml -- och maste hallas i takt for hand.
+
+apiVersion: 1
+
+datasources:
+  - name: InfluxDB
+    uid: limna-influx
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: true
+    jsonData:
+      version: Flux
+      organization: $INFLUX_ORG
+      defaultBucket: $INFLUX_BUCKET
+      httpMode: POST
+    secureJsonData:
+      token: $INFLUX_TOKEN
