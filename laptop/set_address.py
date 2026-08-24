@@ -30,10 +30,24 @@ Requires:  pip install pymodbus
 """
 
 import argparse
+import os
 import sys
 
-import poller
+# sensor_profiles.py ligger i delad/, en niva upp, eftersom firmwaren pa
+# ESP32:n ska lasa exakt samma registerkarta. Tre rader har i stallet for en
+# kopia per mapp -- en kopia ar precis det felet profilen finns for att
+# forhindra.
+DELAD = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     os.pardir, "delad")
+if DELAD not in sys.path:
+    sys.path.insert(0, DELAD)
+
 import sensor_profiles
+
+# poller.py sits beside this file and points sensor_profiles at the right
+# config when it is imported, so the tool talks to the bus exactly as the
+# buoy does.
+import poller
 
 # Asking an address where nothing is expected to answer is the NORMAL case
 # here -- that is what scanning is. pymodbus logs each silent address as an

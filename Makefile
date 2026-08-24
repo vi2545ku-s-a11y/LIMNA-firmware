@@ -1,5 +1,14 @@
 # LIMNA — genvagar. Skriv "make" for att se allt.
 #
+# Repot ar delat i tre mappar sedan 2026-08-24:
+#
+#   delad/      registerkartan. Lases av laptopkoden OCH av firmwaren
+#   laptop/     laptoprepetitionen: simulator, pollare, verktyg
+#   firmware/   ESP32-koden. Annu inte pabörjad, se firmware/README.md
+#
+# Dataplattformen (docker-compose.yml och konfigfilerna) ligger kvar i roten,
+# eftersom Compose laser .env ur sin egen mapp.
+#
 # Simulatorn och pollaren ska koras i VAR SITT fonster, precis som i README.
 # Darfor finns "make sim" och "make poll" som separata mal.
 
@@ -23,17 +32,19 @@ help:
 	@echo "Sedan i tva fonster:  make sim   respektive   make poll"
 
 install:
-	python3 -m pip install -r requirements.txt
+	python3 -m pip install -r laptop/requirements.txt
 
+# Sjalvtesten koras FRAN laptop/. Kartkontrollen jamfor simulatorn med
+# pollaren, och den hittar dem dar de ligger -- inte fran roten.
 selftest:
 	@echo "=== Sensorprofilen ==="
-	python3 sensor_profiles.py --selftest
+	cd laptop && python3 ../delad/sensor_profiles.py --selftest
 	@echo ""
 	@echo "=== Vattenmodellen ==="
-	python3 fake_sensors.py --selftest
+	cd laptop && python3 fake_sensors.py --selftest
 	@echo ""
 	@echo "=== Buffertlogiken ==="
-	python3 poller.py --selftest
+	cd laptop && python3 poller.py --selftest
 
 up:
 	docker compose up -d
@@ -45,17 +56,17 @@ down:
 	docker compose down
 
 sim:
-	python3 fake_sensors.py
+	cd laptop && python3 fake_sensors.py
 
 poll:
-	python3 poller.py
+	cd laptop && python3 poller.py
 
 # Etapp 8. Sensorerna svarar pa sina fabriksadresser, med adresskrocken kvar,
 # sa att adressbytet gar att ova innan monteringsdagen. I ett annat fonster:
-#   python3 set_address.py --list
-#   python3 set_address.py --scan
+#   cd laptop && python3 set_address.py --list
+#   cd laptop && python3 set_address.py --scan
 factory:
-	python3 fake_sensors.py --factory
+	cd laptop && python3 fake_sensors.py --factory
 
 status:
 	@echo "=== Containrar ==="
@@ -65,8 +76,8 @@ status:
 	@pgrep -fl "fake_sensors.py|poller.py" || echo "  inga igang"
 	@echo ""
 	@echo "=== Buffert ==="
-	@test -f buffer.db && python3 -c "import sqlite3; c=sqlite3.connect('buffer.db'); t,p=c.execute(\"SELECT COUNT(*), SUM(CASE WHEN sent=0 THEN 1 ELSE 0 END) FROM readings\").fetchone(); print(f'  {t or 0} matningar, {p or 0} oskickade')" || echo "  buffer.db finns inte an"
+	@test -f laptop/buffer.db && python3 -c "import sqlite3; c=sqlite3.connect('laptop/buffer.db'); t,p=c.execute(\"SELECT COUNT(*), SUM(CASE WHEN sent=0 THEN 1 ELSE 0 END) FROM readings\").fetchone(); print(f'  {t or 0} matningar, {p or 0} oskickade')" || echo "  buffer.db finns inte an"
 
 clean:
-	rm -f buffer.db buffer.db-journal config.json faults.json
+	rm -f laptop/buffer.db laptop/buffer.db-journal laptop/config.json laptop/faults.json
 	@echo "Lokala filer raderade. De skapas pa nytt vid nasta korning."

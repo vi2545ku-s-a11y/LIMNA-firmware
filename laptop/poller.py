@@ -29,11 +29,25 @@ import time
 import traceback
 from datetime import datetime, timezone
 
+
+# sensor_profiles.py ligger i delad/, en niva upp, eftersom firmwaren pa
+# ESP32:n ska lasa exakt samma registerkarta. Tre rader har i stallet for en
+# kopia per mapp -- en kopia ar precis det felet profilen finns for att
+# forhindra.
+DELAD = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     os.pardir, "delad")
+if DELAD not in sys.path:
+    sys.path.insert(0, DELAD)
+
 import sensor_profiles
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(HERE, "config.json")
 DB_FILE = os.path.join(HERE, "buffer.db")
+
+# The profile answers "which family is fitted?" out of the same config file
+# this program writes, not one it guessed at.
+sensor_profiles.use_config(CONFIG_FILE)
 
 DEFAULT_CONFIG = {
     "buoy_id": "HV-001",

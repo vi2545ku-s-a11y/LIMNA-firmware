@@ -35,7 +35,23 @@ import os
 import random
 import time
 
+import sys
+
+# sensor_profiles.py ligger i delad/, en niva upp, eftersom firmwaren pa
+# ESP32:n ska lasa exakt samma registerkarta. Tre rader har i stallet for en
+# kopia per mapp -- en kopia ar precis det felet profilen finns for att
+# forhindra.
+DELAD = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     os.pardir, "delad")
+if DELAD not in sys.path:
+    sys.path.insert(0, DELAD)
+
 import sensor_profiles
+
+# The simulator must read the same config as the poller, or the two could end
+# up rehearsing different sensor families.
+sensor_profiles.use_config(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json"))
 
 # The self test must run without pymodbus installed (README stage 1), so this
 # import is allowed to fail. main() checks properly before starting a server.

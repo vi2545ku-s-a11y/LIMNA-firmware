@@ -29,12 +29,18 @@ upphandlad**. Slutligt val kan bli en annan, till exempel B&C Electronics
 8325, och då stämmer inte en enda adress eller skalfaktor i den nuvarande
 kartan.
 
-Därför ska kartan bo på **ett** ställe, som en utbytbar profil. Att den i dag
-står på två — `REGISTERS` i `fake_sensors.py` och `SENSORS` i `poller.py` —
-utan någon kontroll av att de säger samma sak är ett **fel som ska åtgärdas**,
-inte ett designbeslut som ska bevaras. Ändras den ena i dag följer den andra
-inte med, och pollaren läser fel register utan att något klagar. Målet är att
-byte av givarfamilj är att lägga till en profil och peka `config.json` på den.
+Därför bor kartan på **ett** ställe, som en utbytbar profil. Den stod en gång
+på två — `REGISTERS` i `fake_sensors.py` och `SENSORS` i `poller.py` — utan
+någon kontroll av att de sade samma sak, och ändrades den ena följde den andra
+inte med. Sedan 2026-08-09 är båda vyer av samma tabell, och
+`verify_consistency()` stannar om de skulle glida isär. Byte av givarfamilj är
+att lägga till en profil och peka `config.json` på den.
+
+Sedan 2026-08-24 ligger filen i `delad/sensor_profiles.py`, medvetet utanför
+`laptop/`, eftersom ESP32-firmwaren ska läsa exakt samma fil och kopiera den
+till kortet vid flashning. Laptopprogrammen når den med en sökvägsrad överst i
+varje fil. **Lägg aldrig en kopia i `laptop/` eller `firmware/`** — det är
+precis det felet profilen finns för att förhindra.
 
 Vad som överlever ett familjebyte och vad som inte gör det:
 

@@ -85,9 +85,32 @@ to differ between manufacturers:
 
 import json
 import os
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# WHICH config.json THIS FILE READS
+#
+# Only two things are asked of it: which profile is fitted, and which optional
+# sensors. But this file now lives in delad/ and is shared with the firmware,
+# while config.json belongs to the program that runs -- laptop/config.json for
+# the rehearsal, and something else entirely on the buoy. Guessing "next to
+# myself" would look for delad/config.json, which nothing ever writes.
+#
+# So the caller says. poller.py and fake_sensors.py both call use_config()
+# before loading a profile. The default below only matters when this file is
+# run on its own, as its own self test.
 CONFIG_FILE = os.path.join(HERE, "config.json")
+
+
+def use_config(path):
+    """Point the profile loader at the config the running program uses.
+
+    Called by whoever owns the config file, so that the profile and the
+    poller can never end up reading two different ones.
+    """
+    global CONFIG_FILE
+    CONFIG_FILE = path
 
 DEFAULT_PROFILE = "seeed-2026"
 
@@ -592,6 +615,22 @@ def _poller_view():
     }
 
 
+def _readers_on_path():
+    """Make the simulator and the poller importable, when they exist at all.
+
+    This file lives in delad/ and they live in laptop/, so neither is on the
+    import path just because this self test is running. The directory the
+    test is RUN from is where they sit, which is why the working directory
+    goes on the path and not some hardcoded "../laptop".
+
+    On the buoy neither of them exists. That is not a failure -- the firmware
+    ships the profile and the poller, never the simulator.
+    """
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+
+
 def verify_consistency(log=print):
     """Fail loudly if the simulator and the poller disagree about the map.
 
@@ -600,8 +639,17 @@ def verify_consistency(log=print):
     That is exactly the fault this file exists to make impossible, so it
     stops the program rather than printing a warning nobody reads.
     """
-    sim = _simulator_view()
-    poll = _poller_view()
+    _readers_on_path()
+    try:
+        sim = _simulator_view()
+        poll = _poller_view()
+    except ImportError as exc:
+        # Nothing to compare against. Say which one is missing and from
+        # where, so this reads as "not applicable" and never as "passed".
+        log(f"  hoppar over: {exc.name} gar inte att importera fran "
+            f"{os.getcwd()}")
+        log("  (normalt pa bojen -- kor testet fran laptop/ for att jamfora)")
+        return None
 
     fel = []
     for what in sim:

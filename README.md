@@ -41,14 +41,43 @@ Allt annat sköter Docker.
 
 ---
 
+## Så ligger repot
+
+```
+delad/       registerkartan. Läses av laptopkoden OCH av firmwaren
+laptop/      laptoprepetitionen: simulator, pollare, verktyg
+firmware/    ESP32-koden. Ännu inte påbörjad, se firmware/README.md
+```
+
+Dataplattformen — `docker-compose.yml` och konfigfilerna — ligger kvar i
+roten, eftersom Docker Compose läser `.env` ur sin egen mapp.
+
+**`sensor_profiles.py` ligger i `delad/` och inte i `laptop/`**, för att
+firmwaren ska läsa exakt samma registerkarta. Den kopieras till ESP32:ns
+filsystem vid flashning. Laptopprogrammen når den med tre rader överst i
+filen som lägger `delad/` på importvägen — en kopia per mapp hade varit
+precis det felet profilen finns för att förhindra.
+
+`config.json`, `buffer.db` och `faults.json` skapas i `laptop/`, av
+programmen som äger dem.
+
+> **Python-kommandona nedan körs från `laptop/`.** Det är inte kosmetiskt:
+> kartkontrollen jämför simulatorn med pollaren och hittar dem där de ligger.
+> Kör du `make` i stället sköts det åt dig.
+
+---
+
 ## Etapp 1 — Vattenmodellen
 
 Ingen installation behövs för detta steg.
 
 ```bash
-python3 sensor_profiles.py --selftest
+cd laptop
+python3 ../delad/sensor_profiles.py --selftest
 python3 fake_sensors.py --selftest
 ```
+
+Eller, från roten: `make selftest`.
 
 Det första skriver ut registerkartan: vilka givare profilen innehåller, deras
 register och skalfaktorer, vilka register som *inte* läses, strömkanaler,
@@ -113,12 +142,14 @@ Två terminalfönster.
 
 ```bash
 # fönster 1
-python3 fake_sensors.py
+cd laptop && python3 fake_sensors.py
 ```
 ```bash
 # fönster 2
-python3 poller.py
+cd laptop && python3 poller.py
 ```
+
+Eller `make sim` respektive `make poll` från roten.
 
 Pollaren skapar `config.json` första gången och börjar mäta var 60:e sekund.
 Du ser den slå på railen, vänta ut uppvärmningen, läsa fem sensorer och skicka.
@@ -375,6 +406,7 @@ driftadress och adressregister ur profilen, så inga registernummer skrivs in
 på ett andra ställe.
 
 ```bash
+cd laptop
 python3 set_address.py --list          vad som ska flyttas, och vart
 python3 set_address.py --scan          vilka adresser som svarar just nu
 python3 set_address.py --sensor ec     flytta konduktivitetsgivaren
@@ -392,8 +424,8 @@ hoppar över frågan.
 Öva hela sekvensen utan hårdvara:
 
 ```bash
-python3 fake_sensors.py --factory      i ett fönster
-python3 set_address.py --scan          i ett annat
+cd laptop && python3 fake_sensors.py --factory      i ett fönster
+cd laptop && python3 set_address.py --scan          i ett annat
 ```
 
 De simulerade givarna **byter adress på riktigt** — skriver du till
@@ -501,19 +533,20 @@ med MOSFET-switchen i stället för att bara loggas.
 
 | Fil | Vad den gör |
 |---|---|
-| `sensor_profiles.py` | **Registerkartan, en enda källa.** En profil per givarfamilj |
+| `delad/sensor_profiles.py` | **Registerkartan, en enda källa.** En profil per givarfamilj. Läses även av firmwaren |
+| `firmware/README.md` | Vad ESP32-koden ska bli, och i vilken ordning |
 | `.env` | Lösenord och token. Gitignorerad, skapas ur `.env.example` |
-| `fake_sensors.py` | De simulerade Modbus-sensorerna med realistisk vattenkemi |
-| `poller.py` | Mätlogiken. Blir så småningom firmware |
-| `set_address.py` | Flyttar en givare från fabriksadress till driftadress |
+| `laptop/fake_sensors.py` | De simulerade Modbus-sensorerna med realistisk vattenkemi |
+| `laptop/poller.py` | Mätlogiken. Blir så småningom firmware |
+| `laptop/set_address.py` | Flyttar en givare från fabriksadress till driftadress |
 | `sensor_databla.md` | Vad databladen faktiskt säger, och vad de inte säger |
 | `etapper.md` | Etappprotokoll: vad som är verifierat och vad som inte är det |
-| `larmregler.py` | Skapar de sex larmreglerna i Grafana. Körs en gång |
-| `requirements.txt` | Pinnade versioner av pymodbus, paho-mqtt och pyserial |
+| `laptop/larmregler.py` | Skapar de sex larmreglerna i Grafana. Körs en gång |
+| `laptop/requirements.txt` | Pinnade versioner av pymodbus, paho-mqtt och pyserial |
 | `Makefile` | Genvägar. Skriv `make` för att se dem |
-| `config.json` | Intervall, uppvärmningstid, adresser. Skapas automatiskt |
-| `faults.json` | Felinjektion. Redigera under drift |
-| `buffer.db` | Lokal buffert, SQLite. Motsvarar SD-kortet |
+| `laptop/config.json` | Intervall, uppvärmningstid, adresser. Skapas automatiskt |
+| `laptop/faults.json` | Felinjektion. Redigera under drift |
+| `laptop/buffer.db` | Lokal buffert, SQLite. Motsvarar SD-kortet |
 | `docker-compose.yml` | De fyra serverdelarna |
 | `mosquitto.conf` | Brokerns konfiguration |
 | `telegraf.conf` | Bryggan MQTT → InfluxDB |

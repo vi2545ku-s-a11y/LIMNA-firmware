@@ -48,7 +48,7 @@ def _auth():
         raise SystemExit(
             "GRAFANA_USER och GRAFANA_PASSWORD saknas i miljon.\n"
             "De star i .env, som inte lases automatiskt av python. Kor:\n"
-            "    set -a; source .env; set +a\n"
+            "    set -a; source ../.env; set +a\n"
             "    python3 larmregler.py")
     return f"{user}:{password}"
 
