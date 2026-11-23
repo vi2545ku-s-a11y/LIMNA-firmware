@@ -1,129 +1,321 @@
-# firmware/ — ESP32-koden
+# firmware/ — ESP32-koden för LIMNA-bojen
 
-**Ännu inte påbörjad.** Den här mappen är tom med avsikt: den säger vad som
-ska hit, i vilken ordning, och vilka beslut som redan är fattade. Koden i
-`laptop/` är utkastet — den skrevs som en repetition av det som ska köra här.
+**Ännu inte påbörjad.** Den här filen är specifikationen som firmwaren ska
+skrivas efter. Koden i `laptop/` är utkastet: `poller.py` gör redan allt
+bojen ska göra, men på en laptop mot simulerade givare. Firmwaren är samma
+logik flyttad till en ESP32.
+
+Läs `CLAUDE.md` i roten först. Den förklarar varför koden ser ut som den gör.
+
+---
+
+## Vad bojen gör
+
+Bojen flyter i en bevattningsdamm under säsongen, ungefär april–oktober. Var
+15:e minut:
+
+```
+väck  ->  slå på sensorrailen  ->  vänta ut uppvärmningen  ->  läs givarna
+      ->  slå av railen  ->  tidsstämpla  ->  skriv till SD-kortet
+      ->  skicka om det är dags  ->  djupsömn
+```
+
+Ordningen är krav, inte stil. Mätningen skrivs till SD-kortet **innan** något
+sändförsök (K-03). En givare som inte svarar får inte stoppa de andra
+(EL-03). Ett programfel får aldrig lämna railen påslagen eller bojen vaken
+(EL-05).
 
 ---
 
 ## Språket är MicroPython
 
-Inte C++, och skälet väger tyngre än prestanda: projektägaren är konstruktör,
-inte utvecklare, och ska kunna läsa och ändra bojens kod om tre år. `poller.py`
-går att flytta över nästan mening för mening. En omskrivning i C++ ger en fil
-som ingen i projektet kan underhålla själv.
+Inte C++. Projektägaren är konstruktör, inte utvecklare, och ska kunna läsa
+och ändra bojens kod om tre år. `poller.py` går att flytta över nästan mening
+för mening, och `delad/sensor_profiles.py` kan köras **oförändrad** på kortet
+— det är hela poängen med att registerkartan bara finns på ett ställe.
 
-Kostnaden är ärlig. MicroPython är långsammare och drar något mer ström när
-den är vaken. För en boj som är vaken två minuter per kvart och sover resten
-avgörs energin av uppvärmningstiden, inte av processorn.
-
----
-
-## Det som portas rakt av
-
-Registeravkodningen, medianen av tre avläsningar, omförsöken, larmgränserna,
-F-12-bedömningen, korskontrollerna `temp_d` och `do_d`, `bradskande()`. Vanlig
-Python utan beroenden.
-
-`delad/sensor_profiles.py` följer med **oförändrad**. Den kopieras till kortets
-filsystem vid flashning. Det är fortfarande en enda källa för registerkartan —
-skriv aldrig in ett registernummer här.
+MicroPython är långsammare och drar något mer ström när den är vaken. För en
+boj som är vaken en dryg minut per kvart avgörs energin av uppvärmningstiden,
+inte av processorn.
 
 ---
 
-## Det som faktiskt är arbetet: djupsömn river minnet
+## Hårdvaran i prototypen
 
-`time.sleep` blir `machine.deepsleep()`. Men djupsömn är inte en paus, det är
-en avstängning: vid uppvakning startar programmet om från första raden. **Varje
-mätcykel blir en omstart**, och all modulnivå-state försvinner.
+| Del | Val |
+|---|---|
+| Styrkort | Waveshare ESP32-S3-DEV-KIT-N32R16V-M (ESP32-S3-WROOM-1-N32R16, 32 MB flash, 16 MB OPI-PSRAM) |
+| RS485 | SP3485-modul, 3,3 V, separata DE- och RE-pinnar |
+| pH/ORP-givare | Seeed S-pH&ORP-01A, adress 1 |
+| Grumlighetsgivare | Seeed S-DTS210-01, adress 2 |
+| Matning givare | 12 V **reglerat**, separat från styrkortet, gemensam jord. Grumlighetsgivaren kräver 12–24 V och klarar inte ett batteri som sjunkit under 12 V |
 
-| Vad | I `laptop/poller.py` | Konsekvens vid djupsömn |
+**Pinnar**
+
+| ESP32 | Till | Anmärkning |
 |---|---|---|
-| `_stuck_history` | RAM | **Nollställs varje cykel — fastfrusetkontrollen slutar fungera helt** |
-| `last_send` | RAM | Sändfönstret börjar om, modemet väcks varje uppvakning |
+| GPIO 17 | RS485 DI | UART1 TX |
+| GPIO 18 | RS485 RO | UART1 RX |
+| GPIO 16 | RS485 DE | hög = sända |
+| GPIO 15 | RS485 RE | låg = ta emot (aktivt låg). Styrs ihop med DE |
+| 3V3 / GND | RS485 VCC / GND | |
+| GPIO 4 | spänningsdelare från batteriet | ADC1. Steg 4 |
+| GPIO 5 | MOSFET för sensorrailen | Steg 4 |
+
+Undvik GPIO 0, 3, 45 och 46 (startläge), 19 och 20 (USB), 35–37 (PSRAM) och
+43–44 (seriekonsolen). Batterispänningen ska mätas på ADC1, alltså GPIO 1–10,
+eftersom ADC2 inte fungerar medan WiFi är på.
+
+Givarna matas med 12 V. Ingen 12 V-ledare får nå en ESP32-pinne eller
+RS485-modulens VCC, A eller B.
+
+---
+
+## Givarna och bussen
+
+Allt om register, skalor och adresser står i `delad/sensor_profiles.py`,
+profilen `limna-damm-2026`. **Skriv aldrig in ett registernummer i
+firmwaren.** Läs det ur profilen.
+
+Det som är bra att veta om just de här givarna:
+
+- **Bussen:** 9600 baud, 8N1. Läs värdena ur profilens `serie`. Båda givarna
+  levereras på 9600.
+- **Alla värden är 16-bitars heltal med skalfaktor** ur profilen: pH ÷ 100,
+  ORP ÷ 10, grumlighet ÷ 10, temperatur ÷ 100 (pH-givaren) eller ÷ 10
+  (grumlighetsgivaren). En fråga per värde, funktion 0x03, antal 1.
+- **ORP är signerat** och blir negativt i syrefritt vatten. Tvåkomplement:
+  `raw - 0x10000` om `raw >= 0x8000`.
+- **En givare, flera värden.** pH-givaren på adress 1 ger både `ph` och
+  `orp`. Profilen har en rad per givare med en lista `values`.
+- **Två termometrar.** `temp` kommer från grumlighetsgivaren
+  (`temp_primar` i profilen), och `temp_d` är skillnaden mot pH-givarens.
+- **Svarstid:** manualerna anger ingen. Vänta 200 ms på svar som
+  utgångspunkt. Tre försök per läsning, sedan felkod och vidare till nästa
+  givare.
+
+Registerkartorna är ur tillverkarens manualer (`docs/datablad/`), inte
+provade mot hårdvara. Grumlighetsgivarens fabriksadress anges både som 1
+och 50. Se `sensor_databla.md`.
+
+---
+
+## Modbus RTU: skriv det själv
+
+Firmwaren behöver bara två funktioner: **0x03** (läs register) och **0x06**
+(skriv ett register, för adressbyte). Det är några tiotal rader:
+
+- bygg ramen: adress, funktion, startregister, antal, CRC16 (Modbus,
+  polynom 0xA001, startvärde 0xFFFF, låg byte först)
+- DE och RE höga, skriv ramen på UART, vänta tills den är skickad
+  (`uart.flush()`), DE och RE låga
+- läs svaret med timeout, kontrollera adress, funktionskod och CRC
+- ett felsvar (funktionskod + 0x80) är ett fel, inte ett värde
+
+Ett eget litet lager går att enhetstesta på laptopen med vanlig Python, utan
+kort och utan givare. Ett färdigt bibliotek gör inte det. Känd testvektor:
+
+| Fråga | Ram |
+|---|---|
+| pH-givaren, adress 1, register 0x0000, 10 register | `01 03 00 00 00 0A C5 CD` |
+| Grumlighetsgivaren, adress 1, register 0x0100, 2 register | `01 03 01 00 00 02 C5 F7` |
+| Grumlighetsgivaren, adress 1 → 6, register 0x2000 (funktion 0x06) | `01 06 20 00 00 06 02 08` |
+
+Alla tre är manualernas egna exempel. Svaren finns i `sensor_databla.md`.
+
+---
+
+## Mätcykeln, steg för steg
+
+Följ `measure_cycle()` och `measure_rail()` i `laptop/poller.py`. Kortfattat:
+
+1. **Railen på.** GPIO för MOSFET:en hög. I steg 1–3 finns ingen MOSFET, då
+   är detta bara en loggrad.
+2. **Uppvärmning.** `warmup_s` ur konfigurationen, i dag 30 s. Med
+   `split_rail` en kanal i taget, snabba kanalen först (`rail_warmup()`).
+3. **Läs varje givare tre gånger, ta medianen** (`sample_sensor()`). Flagga
+   `brusig` om spridningen är stor och `out_of_range` om värdet ligger utanför
+   profilens mätområde. Ett flaggat värde sparas ändå. Ett omöjligt tal är
+   bevis och får aldrig kastas eller ersättas.
+4. **Läs termometrarna** (`read_thermometers()`). Finns två eller fler blir
+   största skillnaden fältet `temp_d`.
+5. **Railen av**, i ett `finally`, så att ett undantag aldrig lämnar den på.
+6. **Fastfruset värde** (`check_stuck()`): samma värde bitidentiskt i
+   `stuck_cycles` mätningar flaggas `stuck`. Räknaren ska ligga i RTC-minnet,
+   se nedan.
+7. **Batteri** ur ADC (`read_battery()`): `adc.read_uv() * delningsfaktor`.
+8. **Nyttolast**, se dataformatet nedan.
+9. **Skriv till SD-kortet**, sedan **skicka** om sändfönstret är nått eller
+   något värde passerat en gräns i `alarm_limits` (`bradskande()`, F-12).
+10. **Energisparläge** (`eco_state()`): under 13,0 V längre intervall, tillbaka
+    över 13,2 V.
+11. **Djupsömn** resten av intervallet.
+
+Allt som i pollaren skrivs ut med `log()` ska i firmwaren gå till
+seriekonsolen, och gärna till en loggfil på SD-kortet.
+
+---
+
+## Dataformatet — får inte ändras
+
+En mätning är en JSON-rad. Fältnamnen används av telegraf, Grafana och
+larmreglerna och får inte ändras utan att fråga.
+
+```json
+{"boj":"LIMNA-001","namn":"Bevattningsdamm test","t":"2026-07-27T14:00:00+00:00",
+ "pos":{"lat":55.7047,"lon":13.191},"batt":13.1,"ph":7.83,"orp":239.5,"turb":6.4,
+ "temp":18.3,"temp_d":0.25}
+```
+
+| Fält | Betyder |
+|---|---|
+| `boj`, `namn`, `pos` | ur konfigurationen |
+| `t` | tidsstämpel i UTC, ISO 8601, satt **i bojen** när mätningen gjordes |
+| `batt` | batterispänning, V |
+| `ph` | pH, kompenserat till 25 °C |
+| `orp` | redoxpotential, mV |
+| `turb` | grumlighet, NTU |
+| `temp` | vattentemperatur, °C, från grumlighetsgivaren |
+| `temp_d` | största skillnaden mellan de två termometrarna, °C |
+| `fel` | bara när något gick fel, t.ex. `{"turb":"no_response"}` |
+
+En givare som inte svarar får **inget** fält, bara en rad i `fel`. Sätt
+aldrig in ett gammalt värde eller 0.
+
+MQTT-ämnet är `limna/<boj>/measurements`, QoS 1. Tidsstämpeln kommer från
+bojen eftersom en mätning som legat tre dygn i bufferten ska hamna på rätt
+ställe i grafen. Klockan ställs med NTP när WiFi finns och hålls av en
+DS3231 när det inte gör det (steg 3).
+
+---
+
+## Djupsömn river minnet
+
+`time.sleep` blir `machine.deepsleep()`. Djupsömn är ingen paus utan en
+avstängning: vid uppvakning startar programmet om från första raden, och allt
+i RAM försvinner.
+
+| Vad | I `laptop/poller.py` | Utan RTC-minne |
+|---|---|---|
+| `_stuck_history` | RAM | Nollställs varje cykel. Fastfrusetkontrollen löser aldrig ut |
+| `last_send` | RAM | Sändfönstret börjar om, radion väcks varje cykel |
 | `in_eco` | RAM | Energisparläget fastnar aldrig, F-02 blir verkningslöst |
-| `_scale_cache` | RAM | Nivågivarens skalregister läses varje cykel |
 
-Den första raden motsäger en kommentar som står i pollaren i dag: att räknaren
-nollställs vid omstart beskrivs där som en medveten begränsning, "precis som på
-ESP32:n efter en omstart". Det stämmer när omstarter är sällsynta. Med djupsömn
-är varje cykel en omstart, och tröskeln på 24 respektive 96 mätningar — sex
-timmar och ett dygn — hinner aldrig räknas upp. Kontrollen skulle se ut att
-finnas och aldrig lösa ut.
-
-**Lösningen:** RTC-minnet, som överlever djupsömn. Cirka 2 KB via
-`machine.RTC().memory()`. Där ryms `last_send`, `in_eco`, skalfaktorn och en
-kort tabell över senaste värdet per parameter med räknare.
-
-Det är den enda strukturella ändringen i logiken. Resten är oförändrat.
+**Lösningen:** `machine.RTC().memory()`, som överlever djupsömn (några KB).
+Spara en liten JSON med `last_send`, `in_eco` och senaste värde plus räknare
+per fält. Kontrollera att innehållet går att läsa vid
+uppvakning; tomt eller trasigt betyder kallstart, och då börjar allt om.
 
 ---
 
-## Bufferten: SQLite blir filer
+## Bufferten: filer på SD-kortet
 
-Det finns ingen SQLite i MicroPython, och den behövs inte. Räkna på K-04:
+Ingen SQLite i MicroPython, och den behövs inte. K-04 kräver 30 dygn:
 
-    199 byte × 96 mätningar/dygn × 30 dygn ≈ 570 KB
+    187 byte × 96 mätningar/dygn × 30 dygn ≈ 540 KB
 
-Det är ingenting på ett SD-kort. En fil per dygn, en JSON-rad per mätning, och
-en liten pekare för hur långt sändningen kommit. Skriv mätningen och `flush()`
-**innan** något försök att sända — samma ordning som i dag, samma krav K-03.
-Radera filer äldre än 30 dygn.
-
-Lättare att felsöka med kortet i en läsare än en databas hade varit.
-
----
-
-## Uppkopplingen — beslut som inte är fattat
-
-Bojen har 4G, inte WiFi. Två vägar:
-
-- **PPP mot modemet.** `network.PPP` reser en länk över UART och `umqtt`
-  fungerar som vanliga sockets. Koden liknar den som redan är testad. Mer RAM,
-  och TLS för K-02 blir tungt men görligt.
-- **Modemets egna MQTT-kommandon.** Många moduler (SIM7600, SIM7000) klarar
-  MQTT själva via AT-kommandon, inklusive TLS. Mindre RAM, men sändningen
-  skrivs om mot modemets kommandouppsättning i stället för mot `paho-mqtt`.
-
-Lutar åt PPP, för att det håller koden nära den som är bevisad. Valet hänger
-ihop med vilken modem-modul som köps, alltså med EL-08.
+En fil per dygn, en JSON-rad per mätning, och en liten fil med hur långt
+sändningen har kommit. Skriv mätningen och anropa `flush()` innan något
+sändförsök. Markera en rad som skickad först när brokern bekräftat den
+(QoS 1). Radera filer äldre än 30 dygn. Ett vanligt microSD-kort räcker
+under säsongen.
 
 ---
 
-## Strömrailen
+## Uppkopplingen
 
-`[ström på]` blir en GPIO som styr en MOSFET. `split_rail` blir två GPIO:er
-(E-11, E-12). Det är den enkla delen.
+**I prototypen: WiFi** och `umqtt.simple` mot samma broker som laptopen
+(Mosquitto i `docker-compose.yml`). Inga lösenord i koden — de står i en
+konfigurationsfil på kortet som inte versionshanteras.
 
-Den svåra: **mät den verkliga sömnströmmen på det kort du väljer.** En bar
-ESP32-modul drar runt tio mikroampere i djupsömn. Ett vanligt utvecklingskort
-med USB-krets och regulator kan dra flera milliampere — tusen gånger mer — och
-det äter upp hela energibudgeten utan att synas någonstans i koden. Välj kort
-efter uppmätt sömnström, inte efter datablad för chippet.
+Ute i dammen väljs senare mellan:
 
-`machine.WDT` ger EL-05 nästan gratis: hänger programmet startar kortet om. En
-krasch mitt i en cykel är värre än ett tappat mätvärde, för då sover bojen
-aldrig.
+- **LoRaWAN.** En gateway på gården tar emot från bojen och från
+  markfuktsgivarna. Lägst strömförbrukning och inget SIM. Kräver att
+  nyttolasten krymps till några tiotal byte, binärt i stället för JSON.
+- **Mobilnät (LTE-M).** PPP mot modemet så att `umqtt` fungerar som över
+  WiFi, eller modemets egna MQTT-kommandon.
 
----
-
-## Ordningen
-
-1. ESP32 på bänken, blinka en lysdiod, **mät sömnströmmen**.
-2. Modbus RTU mot **en** riktig givare, med profilen kopierad rakt av.
-3. Djupsömnscykeln med RTC-minnet — mät, sov, mät, och se att räknarna
-   överlever.
-4. SD-kortet och bufferten.
-5. Modemet och sändningen.
-6. Först därefter MOSFET-railen och delningen.
-
-Steg 1 och 3 först, eftersom de avgör om energibudgeten håller. Är
-sömnströmmen fel spelar resten ingen roll.
+Skriv därför sändningen som en egen modul med en funktion,
+`send(rader) -> antal bekräftade`, så att transporten kan bytas utan att
+mätcykeln rörs.
 
 ---
 
-## Öppen fråga
+## Ordningen — samma steg som prototypplanen
 
-Modbus-biblioteket för MicroPython är inte pymodbus. Det finns fungerande
-alternativ, men API:et skiljer sig — verifiera vilket som gäller innan koden
-skrivs mot det, i stället för att gissa.
+| Steg | Bygg | Klart när |
+|---|---|---|
+| 1 | Modbus RTU mot pH/ORP-givaren och grumlighetsgivaren, utskrift i seriekonsolen | Båda givarna ger rimliga värden, pH visar ca 7 i kranvatten och 4,00 i buffertlösning, och grumligheten stiger när vattnet rörs upp |
+| 2 | WiFi, NTP och MQTT, samma nyttolast som pollaren | Värdena syns i Grafana medan man tittar, och kortet återansluter efter WiFi-avbrott |
+| 3 | DS3231 och SD-bufferten | En timme utan WiFi ger inga luckor, med rätt tidsstämplar. Samma efter strömavbrott |
+| 4 | Djupsömn, RTC-minne, MOSFET för railen, batterimätning, watchdog | Förbrukningen är uppmätt under ett dygn: sömn, mätcykel och uppvärmning |
+| 5 | Radiolänk eller mobilnät i stället för WiFi | Data kommer fram från dammen och bufferten töms efter avbrott |
+| 6 | Sol, batteri och laddregulator (ingen kod, bara mätning) | En vecka utan eluttag utan att batteriet sjunker |
+| 7 | Fältversion | Två veckor i dammen utan fel |
+
+**Mät sömnströmmen tidigt.** En bar ESP32-modul drar runt tio mikroampere i
+djupsömn. Waveshare-kortet har USB-kretsar och lysdiod och drar troligen
+milliampere — tusen gånger mer. Det duger på bänken men troligen inte i
+bojen, och det syns ingenstans i koden.
+
+`machine.WDT` ger EL-05 nästan gratis: hänger programmet startar kortet om.
+
+---
+
+## Testa utan hårdvara
+
+Givarna är inte levererade. Bygg så att det mesta går att testa ändå.
+
+1. **På laptopen, med vanlig Python.** CRC, rambygge, avkodning (signerat och
+   osignerat), median, flaggor, nyttolast och bufferten är ren Python utan
+   `machine`. Lägg dem i moduler som inte importerar `machine` och testa dem
+   med `pytest`. Jämför mot `laptop/poller.py` — samma indata ska ge samma
+   nyttolast.
+2. **På kortet, utan givare.** En `FakeBus` med samma funktioner som den
+   riktiga Modbus-klassen, som svarar med värden ur samma modell som
+   `laptop/fake_sensors.py`: pH som svänger över dygnet, grumlighet som
+   stiger när det bevattnas eller regnar, och fel värde om man läser före
+   uppvärmningen. Välj
+   buss i konfigurationen.
+3. **På kortet, med riktig buss men simulerade givare.** USB–RS485-adapter på
+   laptopen och `fake_sensors.py` som Modbus RTU-slav. I dag kör simulatorn
+   bara TCP; ett `--rtu`-läge med pymodbus serieserver är en liten ändring.
+
+---
+
+## Konfiguration på kortet
+
+En `config.json` på kortets filsystem, med samma nycklar som
+`laptop/config.json` där de gäller: `buoy_id`, `buoy_name`, `position`,
+`sensor_profile`, `measure_interval_s`, `send_interval_s`, `warmup_s`,
+`retries`, `alarm_limits`, `eco_mode`, `stuck_cycles`, `split_rail`,
+`sampling`, `mqtt`. Lägg till `wifi` (SSID och lösenord) och `pins` om
+pinnarna ska gå att ändra utan ny kod.
+
+---
+
+## Kända fallgropar
+
+- `delad/sensor_profiles.py` använder `os.path`, som inte finns i
+  MicroPython. Lös det **i den filen** med en enkel ersättning när `os.path`
+  saknas — gör aldrig en egen kopia av profilen.
+- `dict(profile, sensors=...)` i `load_profile()`: kontrollera att den
+  fungerar i MicroPython-versionen ni flashar.
+- Bygg MicroPython för N32R16-modulen med OPI-PSRAM, annars startar kortet inte.
+- Båda givarna kan levereras på **adress 1**. Flytta grumlighetsgivaren till
+  2 ensam innan pH-givaren kopplas in (`laptop/set_address.py --sensor turb`
+  över USB–RS485). Svarar den inte på 1, prova 50.
+- pH-givaren tar en ny adress först efter strömcykel, om den någon gång
+  behöver flyttas.
+- Förvara pH-elektroden i 3 M KCl eller med skyddet på när bojen är upptagen
+  över vintern. Den förstörs av att torka ut.
+- `adaptive_warmup` ska vara av. Den bygger på en obekräftad hypotes, se
+  kommentaren i `poller.py`.
+
+---
+
+## Utanför det första bygget
+
+OTA-uppdatering, fjärrkonfiguration, GPS, accelerometer, LoRa-nyttolast,
+TLS (K-02) och markfuktsgivarna. Lämna tydliga ställen där de kopplas in.

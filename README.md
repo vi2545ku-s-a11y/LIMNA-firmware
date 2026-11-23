@@ -3,6 +3,12 @@
 Bygg och testa hela kedjan från sensor till dashboard **innan hårdvaran kommer.**
 När sensorerna anländer byter du en rad kod och kopplar in dem.
 
+**Bojen ligger i en bevattningsdamm** och går under bevattningssäsongen,
+ungefär april–oktober. Den har två givare från Seeed: en pH-givare som mäter
+pH, redoxpotential (ORP) och temperatur, och en grumlighetsgivare som mäter
+grumlighet och temperatur. Manualerna ligger i `docs/datablad/` och är
+sammanfattade i `sensor_databla.md`.
+
 ```
                  sensor_profiles.py
               (registerkartan, en enda källa)
@@ -47,6 +53,7 @@ Allt annat sköter Docker.
 delad/       registerkartan. Läses av laptopkoden OCH av firmwaren
 laptop/      laptoprepetitionen: simulator, pollare, verktyg
 firmware/    ESP32-koden. Ännu inte påbörjad, se firmware/README.md
+docs/datablad/  tillverkarens manualer för de två givarna (PDF)
 ```
 
 Dataplattformen — `docker-compose.yml` och konfigfilerna — ligger kvar i
@@ -85,28 +92,26 @@ effekt, fabriksadresser och kabelvarningar. Sist kontrollerar det att
 simulatorn och pollaren ser **samma** karta, och stannar med felmeddelande om
 de inte gör det.
 
-Det andra skriver ut **nio avsnitt**: ett dygns kurvor, en kontroll av att pH
-följer syret, ett regnförlopp, uppvärmningen för syre och pH sida vid sida,
-varifrån uppvärmningstiderna kommer, de signerade registren, nivågivarens
-skala, sensorernas fabriksadresser och till sist samma kartkontroll.
+Det andra skriver ut **sju avsnitt**: ett dygns kurvor, ett regnförlopp,
+uppvärmningen för pH och grumlighet sida vid sida, varifrån
+uppvärmningstiderna kommer, signerad avkodning av ORP, sensorernas
+fabriksadresser och till sist samma kartkontroll.
 
-> Antalet stod tidigare som åtta här och som sex i `etapper.md`. Nio gäller
-> från 2026-08-10, när kartkontrollen tillkom.
-
-**KONTROLL:** syret toppar på eftermiddagen kring 11 mg/L och bottnar före
-gryningen kring 7,5. Vid regn stiger turbiditeten från 4 till över 30 NTU
-samtidigt som konduktiviteten sjunker, nivån stiger och pH sjunker.
-
-Att de rör sig tillsammans är avsiktligt. Det är så en verklig avrinning ser
-ut, och det är vad larmreglerna ska klara av att skilja från ett sensorfel.
+**KONTROLL:** pH toppar på eftermiddagen kring 8,0 och bottnar före gryningen
+kring 7,3. ORP följer samma dygn mellan ungefär 235 och 285 mV. Grumligheten
+ligger kring 6 NTU, stiger till ungefär 10 när det bevattnas 05–08, och till
+närmare 50 vid regn.
 
 Tre saker till som testet ska säga:
 
-- **`23 av 23 timsteg ror sig at samma hall`** — pH och syre drivs båda av
-  fotosyntesen och ska följas åt. Gör de inte det är modellen fel.
-- **−2,51 °C ska läsas som −2,51**, inte som 652,85. Tre register är signerade
-  int16 och läses nu som sådana.
-- **Konduktivitet och pH står båda på adress 1** från fabrik. Se etapp 8.
+- **ORP är signerat.** Läses registret som osignerat blir −12,5 mV till
+  6541,1 mV. Se kolumnen "osignerat".
+- **En för tidig avläsning ger fel värde som ser rimligt ut.** pH läst efter
+  några sekunder visar runt 4,5 i stället för 7,9.
+- **Båda givarna står på adress 1** från fabrik. Se etapp 8.
+
+`python3 poller.py --selftest` kontrollerar dessutom att profilen avkodar
+manualernas egna exempelsvar till de värden manualerna anger.
 
 ---
 
@@ -152,15 +157,9 @@ cd laptop && python3 poller.py
 Eller `make sim` respektive `make poll` från roten.
 
 Pollaren skapar `config.json` första gången och börjar mäta var 60:e sekund.
-Du ser den slå på railen, vänta ut uppvärmningen, läsa fem sensorer och skicka.
+Du ser den slå på railen, vänta ut uppvärmningen, läsa givarna och skicka.
 Först skriver den ut vilken sensorprofil den kör, vilka larmgränser den har,
 och vad en delad strömrail skulle spara.
-
-> **Sjätte givaren.** Under fälttest sitter en andra syregivare på adress 6
-> (krav U-04). Lägg `"optional_sensors": ["do2"]` i `config.json` så tas den
-> med, och nyttolasten får fälten `do2` och `do_d` — skillnaden mellan de två
-> givarna, som är själva mätstorheten när påväxt ska mätas. Utan raden är
-> bojen femgivarig precis som förut.
 
 Gå till Grafana → Explore, välj InfluxDB och kör:
 
@@ -168,7 +167,7 @@ Gå till Grafana → Explore, välj InfluxDB och kör:
 from(bucket: "limna")
   |> range(start: -1h)
   |> filter(fn: (r) => r._measurement == "limna")
-  |> filter(fn: (r) => r._field == "do")
+  |> filter(fn: (r) => r._field == "ph")
 ```
 
 **KONTROLL:** en punkt dyker upp per mätning, med rätt tidsstämpel.
@@ -177,8 +176,9 @@ Detta är det ögonblick då hela kedjan bevisligen fungerar. Allt därefter är
 påbyggnad.
 
 > **Otålig?** Sätt `warmup_s` till `5` i `config.json` medan du bygger.
-> Kom ihåg att sätta tillbaka det till 90 innan du drar några slutsatser
-> om energiförbrukning.
+> Kom ihåg att sätta tillbaka det till 30 innan du drar några slutsatser
+> om energiförbrukning. Med för kort uppvärmning läser pH för lågt och
+> spretar, med flaggan `brusig` — det är simuleringen som gör sitt jobb.
 
 ---
 
@@ -190,8 +190,10 @@ påbyggnad.
 "sensor_2_turb": "offline"
 ```
 
-**KONTROLL:** pollaren loggar `SVARAR INTE efter 3 forsok` för turbiditeten,
-**och de övriga tre fortsätter helt normalt.**
+**KONTROLL:** pollaren loggar `SVARAR INTE efter 3 forsok` för grumligheten,
+**och pH-givaren fortsätter helt normalt.** Temperaturen faller tillbaka på
+pH-givarens termometer, och `temp_d` försvinner ur nyttolasten — en
+termometer kan inte vara oense med sig själv.
 
 Det är krav EL-03 demonstrerat. Ett sensorfel får aldrig ta ner hela mätningen.
 Detta är också demoscenario 1 i frontend-specen.
@@ -199,7 +201,7 @@ Detta är också demoscenario 1 i frontend-specen.
 Prova även `"noisy"` — sensorn svarar men värdet hoppar. Pollaren läser varje
 givare **tre gånger** per mätning och tar medianen, så ett enstaka skräpvärde
 försvinner utan att något behöver ställas in. Spretar alla tre flaggas raden
-`"fel":{"ec":"brusig"}`. Det var den enda av de fyra feltyperna som
+`"fel":{"ph":"brusig"}`. Det var den enda av de fyra feltyperna som
 ingenting letade efter förut.
 
 Prova även `"stuck"` — sensorn svarar men med ett fastfruset värde. Det är det
@@ -207,23 +209,23 @@ verkligt lömska felet, eftersom systemet ser friskt ut.
 
 **Pollaren letar numera efter det.** Har ett värde varit bitidentiskt i
 `stuck_cycles` mätningar i rad (24 stycken, alltså sex timmar vid riktigt
-intervall) flaggas raden med `"fel":{"ph":"stuck"}`. Sänk `stuck_cycles` till
+intervall) flaggas raden med `"fel":{"turb":"stuck"}`. Sänk `stuck_cycles` till
 3 i `config.json` om du vill se det hända medan du tittar.
 
-Det är en **misstanke**, inte en dom. Konduktiviteten mäts i hela µS/cm och
-kan stå still på samma heltal en stund utan att vara trasig — därför har den
-en egen, längre tröskel i profilen (96 mätningar mot 24 för övriga).
+Det är en **misstanke**, inte en dom. Tröskeln står per givare i profilen,
+eftersom ett grovt kvantiserat värde ärligt kan stå still länge.
 
 ### Vad som händer med ett omöjligt värde
 
-Ett värde utanför databladets mätområde — pH 85 därför att skalfaktorn är fel,
-eller −2,51 °C läst som 652,85 — **sparas med flaggan `out_of_range`**. Det
+Ett värde utanför databladets mätområde — ORP 6541 mV därför att ett
+signerat register lästes som osignerat — **sparas med flaggan
+`out_of_range`**. Det
 kasseras inte, och det ersätts aldrig med ett tidigare värde (krav EL-03).
 
 Ett omöjligt tal är bevis. Kastar man det ser grafen frisk ut med ett hål som
-liknar ett kommunikationsfel, och nästa person letar på fel ställe. Bara pH
-har ett angivet mätområde i databladen, så bara pH kan kontrolleras — de
-övriga fyra säger det rakt ut i självtestet.
+liknar ett kommunikationsfel, och nästa person letar på fel ställe. Alla tre
+värdena har ett angivet mätområde — pH 0–14, ORP ±2000 mV, grumlighet
+0–1000 NTU — och självtestet skriver ut dem.
 
 ---
 
@@ -251,46 +253,44 @@ tiden ur meddelandet, inte ur klockan när det togs emot.
 
 ## Etapp 6 — Larm
 
-**Sex regler**, som `larmregler.py` skapar åt dig. Grafana → Alerting →
+**Fem regler**, som `larmregler.py` skapar åt dig. Grafana → Alerting →
 Alert rules.
 
 | Larm | Regel | Krav |
 |---|---|---|
-| Lågt syre | `do` under 5,0 i 15 min | F-10 |
-| Snabb turbiditetsökning | `turb` ökar mer än 200 % på 3 h | F-11 |
+| pH utanför gränserna | `ph` utanför 6,0–9,0 i 15 min (PLACEHOLDER) | F-10 |
+| Grumligt vatten | `turb` över 50 NTU i 30 min (PLACEHOLDER) | F-10 |
 | Mätningar saknas | glapp över tre mätintervall **mellan två mätningar** | F-13 |
 | Bojen har inte hört av sig | inget alls levererat på 13 h | F-13 |
 | Lågt batteri | `batt` under 12,4 | F-13 |
-| Temperaturgivarna oense | `temp_d` över 1,0 °C i 30 min | F-13 |
 
-> Antalet stod tidigare som fyra här och i `larmregler.py`, och som fem i
-> `etapper.md`. Sex gäller, och har gjort det sedan regeln "Sensor svarar
-> inte" delades i två.
+> Ett taktlarm (F-11) läggs till här när bonden sagt vad "snabbt" är för
+> just den dammen — grumlighet som stiger fort är regn eller en pump som rör
+> upp botten, pH som stiger fort är en algblomning på väg.
+>
+> Den gamla regeln "Lagt syre" tas bort av `larmregler.py` om den finns kvar
+> i Grafana.
 
 Tidsgränserna räknas ur `config.json` — glappet är tre mätintervall och
 tystnaden två ekointervall plus en timme. Kör du `larmregler.py` medan
 konfigfilen står på utvecklingsvärden bygger den regler som larmar var tredje
 minut, och säger till om det innan den gör det.
 
-**Bojen har egna gränser sedan 2026-08-10.** `alarm_limits` i `config.json`
+**Bojen har egna gränser.** `alarm_limits` i `config.json`
 gör att bojen själv känner igen ett larm och skickar mätningen direkt i
 stället för att vänta på nästa sändfönster (krav F-12). Reglerna här ligger
 kvar som andra försvarslinje: bojen avgör *när* något skickas, Grafana avgör
 vem som väcks, håller larmhistoriken och fångar takt och tystnad som bojen
-inte kan se om sig själv. Håll talen i takt — `do` 5,0, `batt` 12,4 och
-`temp_d` 1,0 står på båda ställena.
+inte kan se om sig själv. Håll talen i takt — `ph` 6,0–9,0, `turb` 50 och
+`batt` 12,4 står på båda ställena.
 
-> **De flesta gränserna är PLACEHOLDER.** Krav Ö-08 säger att larmnivåer per
-> parameter fastställs av Swedamm tillsammans med kommunen, för den faktiska
-> pilotplatsen. Bara `do`, `batt` och `temp_d` är beslutade. Övriga är
-> platshållare så att mekaniken går att prova, märkta med `*` i pollarens
-> startutskrift och i `_placeholder` i konfigfilen. De ska ersättas före
-> pilot.
+> **Alla gränser utom batteriets är PLACEHOLDER.** Vilket pH och vilken
+> grumlighet som är ett problem bestäms tillsammans med bonden, för den
+> faktiska dammen. Platshållarna är märkta med `*` i pollarens startutskrift
+> och i `_placeholder` i konfigfilen.
 >
-> `ec` och `lvl` har medvetet **inga** gränser. Konduktivitetens driftområde
-> är 50–300 µS/cm, så den gräns på 1000 som stod här först hade aldrig löst
-> ut — och en gräns som aldrig löser ut är sämre än ingen alls, eftersom den
-> ser ut som ett skydd. Nivåns gränser beror på var bojen förankras.
+> `orp` har medvetet **ingen** gräns ännu. Lågt eller negativt ORP betyder
+> syrefritt vatten, men var gränsen går beror på dammen.
 
 De två första F-13-larmen var tidigare ett enda: "ingen data på 45 minuter".
 Det gick inte att behålla när sändningen blev glesare än mätningen — mellan
@@ -301,23 +301,19 @@ Skillnaden nu: en punkts tidsstämpel är den **bojen** satte, så ett glapp i
 serien betyder att bojen inte mätte — inte att den inte hann rapportera. Det
 är två olika fel med två olika servicebesök.
 
-Testa dem genom att sätta `"oxygen_decline": true` respektive
-`"rain_event": true` i `faults.json`.
+Testa pH- och grumlighetslarmen genom att sätta `"bloom": true` i
+`faults.json` (simulerad algblomning: pH och grumlighet stiger timme för
+timme), eller `"rain_event": true` för en grumlighetstopp.
 
-**KONTROLL:** larmen utlöses, och de återgår när du sätter tillbaka värdena.
-
-Förändringstakt-larmet är det svåraste och det mest värdefulla. Ett fast
-gränsvärde säger att något redan hänt; ett takt-larm säger att något håller på
-att hända. Det är skillnaden mellan en logger och en produkt.
+**KONTROLL:** larmet utlöses, och det återgår när du sätter tillbaka värdet.
 
 ---
 
 ## Etapp 6b — Energisparläge och batteri
 
-`batt` var hårdkodat till 13,1 fram till 2026-08-10, vilket gjorde att
-larmet för lågt batteri aldrig kunde provoceras och att ekoläget inte hade
-något att reagera på. Nu läses batteriet som vilken parameter som helst
-(krav E-07) — på bojen är det en ADC-avläsning, här en konfigurerad källa.
+Batteriet läses som vilken parameter som helst (krav E-07) — på bojen är det
+en ADC-avläsning, här en konfigurerad källa så att ekoläget och larmet för
+lågt batteri går att provocera.
 
 För att se krav F-02 hända, sätt i `config.json`:
 
@@ -342,13 +338,11 @@ De tre spänningarna gör tre olika saker och får inte sammanfalla:
 | **13,0 V** | in i energisparläge — ungefär halva kapaciteten på 4S LiFePO4 |
 | **12,4 V** | larm om lågt batteri, servicebesök |
 
-Ekoläget låg först på 12,4 V, alltså exakt samma spänning som larmet. Då
-började bojen spara ström i samma ögonblick som situationen blev akut, och
-läget fick aldrig göra det det finns till för. Urladdningskurvan på LiFePO4 är
-dessutom platt ner till omkring 12,8 V och faller sedan brant — vid 12,4 V
-återstår runt tio procent. Beräkningsunderlaget 5.2 får sina cirka 30 dygns
-uthållighet just genom att anta växling vid halva batteriet, och med den gamla
-tröskeln fanns de dygnen inte.
+Ligger ekoläget på samma spänning som larmet börjar bojen spara ström i samma
+ögonblick som situationen blir akut, och läget får aldrig göra det det finns
+till för. Urladdningskurvan på LiFePO4 är platt ner till omkring 12,8 V och
+faller sedan brant — vid 12,4 V återstår runt tio procent. Därför växlar
+bojen redan vid halva batteriet.
 
 `drain_v_per_h: 60` är orimligt snabbt med flit, så du slipper vänta. Sätt
 tillbaka `"source": "fixed"` efteråt.
@@ -370,36 +364,33 @@ Spara dashboarden som JSON och lägg den i versionshantering. Då är den
 
 Tre ändringar, i denna ordning:
 
-**1. ~~Rätta registerkartan.~~ Klart, och den bor numera på ett ställe.**
-Adresser och skalfaktorer är verifierade mot databladen 2026-07-29 och ligger
-i `sensor_profiles.py`. Både simulatorn och pollaren läser den därifrån —
+**1. Registerkartan bor på ett ställe: profilen `limna-damm-2026`** i
+`sensor_profiles.py`. Både simulatorn och pollaren läser den därifrån —
 ingen av dem har en egen kopia, och självtestet stannar om de skulle sluta
 säga samma sak.
 
-Kartan gäller **en givarfamilj**, och den är ännu inte upphandlad. Blir det en
-annan (till exempel B&C Electronics 8325) lägger du till en profil till och
-pekar `config.json` på den med `"sensor_profile"`. Bara driftadresserna 1–5
-följer med — register, skalor, fabriksadresser, uppvärmningstider och
-ledarfärger är produktspecifika. Ändra inget utan ett nytt datablad i handen.
+Båda givarnas register kommer ur **tillverkarens manualer**
+(`docs/datablad/`, sammanfattade i `sensor_databla.md`). Ingen av dem är ännu
+provad mot riktig hårdvara.
 
-**Sätt adresserna innan du kopplar in allt.** De fem sensorerna levereras med
-fabriksadresserna 55, 50, 1, 26 och 1 — konduktivitet och pH har **samma
-adress från fabrik**. Kopplar du in båda innan du ändrat den ena sänder de
-samtidigt, svaret blir oläsligt, och styrkortet rapporterar "svarar inte".
-Det skickar dig på jakt efter en trasig sensor när felet är en adresskrock.
+**Ingen baudrate behöver ändras.** Båda givarna levereras på 9600 baud, samma
+som bussen.
 
-**Adressregistret är inte samma för alla fem, och ingen har provat det.**
-Databladen anger `0x2000` för syre och turbiditet, `0x0200` för konduktivitet
-och pH, och `0x0000` för nivån. README och koden påstod till 2026-08-10 att
-alla fem använder `0x0200` — det var fel. Registren står nu per givare i
-`sensor_profiles.py`, märkta **OVERIFIERAT mot hårdvara**: kontrollera mot
-databladets sida innan monteringsdagen, inte under den.
+**Sätt adresserna innan du kopplar in allt.** Båda givarna levereras på
+**adress 1**. Kopplar du in båda innan du ändrat den ena sänder de samtidigt,
+svaret blir oläsligt, och styrkortet rapporterar "svarar inte". Det skickar
+dig på jakt efter en trasig sensor när felet är en adresskrock. pH-givaren
+får behålla 1; grumlighetsgivaren flyttas ensam till 2.
 
-**Återställningsknappen finns bara dokumenterad på konduktivitetsgivaren**
-(SW1-SET, håll i tre sekunder så återgår kommunikationsinställningarna till
-fabriksläge). README påstod tidigare att alla fem har en. Databladen säger
-inget om de övriga fyra — utgå från att du inte kan trycka dig ur ett misstag
-på dem.
+**Grumlighetsgivarens fabriksadress är osäker.** Manualens registertabell
+säger 50, dess kommandoexempel använder 1. `--scan` frågar båda.
+
+**Adressregistret skiljer sig mellan givarna.** pH-givaren använder `0x0200`
+och tar den nya adressen först efter en strömcykel. Grumlighetsgivaren
+använder `0x2000`.
+
+**Mata givarna med reglerade 12 V.** Grumlighetsgivaren kräver 12–24 V och
+klarar inte ett batteri som sjunkit under 12 V.
 
 **Verktyget som gör flytten** är `set_address.py`. Det läser fabriksadress,
 driftadress och adressregister ur profilen, så inga registernummer skrivs in
@@ -409,7 +400,7 @@ på ett andra ställe.
 cd laptop
 python3 set_address.py --list          vad som ska flyttas, och vart
 python3 set_address.py --scan          vilka adresser som svarar just nu
-python3 set_address.py --sensor ec     flytta konduktivitetsgivaren
+python3 set_address.py --sensor turb   flytta grumlighetsgivaren till adress 2
 ```
 
 Verktyget **vägrar skriva medan mer än en givare svarar**, och det vägrar om
@@ -432,12 +423,15 @@ De simulerade givarna **byter adress på riktigt** — skriver du till
 adressregistret försvinner givaren från sin gamla adress och dyker upp på den
 nya, precis som på bänken. En repetition som går igenom är alltså bevis för
 att *sekvensen* stämmer. Den är inte bevis för att registernumren gör det.
-De kommer ur databladen och är märkta OVERIFIERAT tills någon gjort det här
-mot en riktig givare.
+De kommer ur manualerna och är inte provade förrän någon gjort det här mot
+en riktig givare.
 
-Adresskrocken syns också i repetitionen: konduktivitet och pH svarar båda på
-1 från fabrik, och i fabriksläge svarar den adressen därför inte alls — precis
-som två riktiga givare som sänder samtidigt.
+Adresskrocken syns också i repetitionen: båda givarna svarar på 1 från
+fabrik, och i fabriksläge svarar den adressen därför inte alls — precis som
+två riktiga givare som sänder samtidigt. "Koppla ur" pH-givaren genom att
+sätta `"sensor_1_ph": "offline"` i `faults.json`; då svarar
+grumlighetsgivaren ensam på 1 och kan flyttas. Sätt tillbaka `"ok"` efteråt
+och `--scan` visar båda, på 1 och 2.
 
 **2. Byt transport.** Numera en rad i `config.json`, inte en ändring i koden:
 
@@ -480,42 +474,30 @@ största enskilda posten i bojens energiförbrukning.
 Returnerar givaren `0` innan den är klar, eller ett värde som bara är fel?
 Frågan avgör om `"adaptive_warmup": true` går att använda: då läser pollaren
 tills värdet blir giltigt i stället för att vänta en fast tid. Flaggan finns
-i koden och är **avstängd**, eftersom svaret är okänt för just dessa givare —
-ledtråden i `sensor_databla.md` gäller en annan Seeed-sensor.
+i koden och är **avstängd**, eftersom svaret är okänt för just dessa givare.
 
-Vad det står och faller med, uppmätt i simulering 2026-08-10 med
-`warmup_s = 45`:
+Risken med den, i simulering: med fel hypotes kortas cykeln från 30 till
+0,5 s och pH-värdet blir runt 45 procent för lågt.
+Det ser ut som en enorm energivinst och ger skräpdata. Slå inte på flaggan
+mot hårdvara förrän någon sett vad registret faktiskt innehåller.
 
-| | Cykeltid | Syre |
-|---|---|---|
-| Fast uppvärmning | 45,3 s | 10,43 |
-| Adaptiv, hypotesen stämmer | 40,0 s | 10,65 |
-| Adaptiv, hypotesen är fel | **0,5 s** | **5,73** |
-
-Sista raden är hela risken. Den ser ut som en enorm energivinst och ger ett
-syrevärde 45 procent för lågt, samt ett pH på 5,09 som hade utlöst larm. Slå
-inte på flaggan mot hårdvara förrän någon sett vad registret faktiskt
-innehåller.
-
-Av de fem tiderna står **två** i databladen: konduktivitet och pH, båda under
-2 sekunder. Nivåns 1 sekund är härledd ur en angiven svarstid på 5 ms — hur
-snabbt givaren svarar när den väl är igång, inte hur lång tid det tar dit.
-Kvar att mäta är syret (antaget 40 s) och turbiditeten (antaget 8 s).
+Ingen av tiderna är en uppmätt uppstartstid. pH-givarens 30 s är
+databladets **svarstid** för ORP — hur snabbt givaren följer en ändring när
+den väl är igång, inte hur lång tid det tar dit. Grumlighetsgivarens 10 s är
+en ren gissning: dess datablad säger ingenting.
 
 Självtestet skriver ut varifrån varje tid kommer, så gissningarna syns för den
 som kör koden och inte bara för den som läser den.
 
-**Det obekväma:** de två sensorer som drar mest ström är de som blir klara
-snabbast. Att hålla alla fem påslagna i 90 sekunder för att syresensorn behöver
-det kostar ungefär 5 Wh per dygn av en budget på 13,4 — skillnaden mellan att
-klara autonomikravet och att missa det. Lösningen är två strömkanaler i stället
-för en, så den snabba gruppen kan läsas och stängas av medan syresensorn
-fortfarande sätter sig (krav E-11 och E-12).
+**Strömkanaler.** Grumlighetsgivaren antas klar på några sekunder,
+pH-givaren behöver en halv minut. Med två strömkanaler kan grumligheten läsas
+och stängas av medan pH-elektroden fortfarande sätter sig (krav E-11 och
+E-12). Grumlighetsgivaren är dessutom den som drar mest, 0,3 W mot högst
+0,12 W, så det är den som lönar sig att stänga av tidigt.
 
 **Mjukvaran är byggd, hårdvaran är det inte.** Sätt `"split_rail": true` i
 `config.json` så slår pollaren på snabba kanalen, väntar ut dess uppvärmning,
-läser konduktivitet, pH och nivå, stänger av, och gör sedan om det för syre
-och turbiditet. Rail-tillhörighet och uppvärmningstid står per givare i
+läser grumligheten, stänger av, och gör sedan om det för pH-givaren. Rail-tillhörighet och uppvärmningstid står per givare i
 profilen. Den andra MOSFET:en finns dock inte i bojen ännu, så med en
 strömkanal mäter flaggan bara samma givare i en krångligare ordning.
 
@@ -540,8 +522,9 @@ med MOSFET-switchen i stället för att bara loggas.
 | `laptop/poller.py` | Mätlogiken. Blir så småningom firmware |
 | `laptop/set_address.py` | Flyttar en givare från fabriksadress till driftadress |
 | `sensor_databla.md` | Vad databladen faktiskt säger, och vad de inte säger |
+| `docs/datablad/` | Seeeds manualer för pH/ORP-givaren och grumlighetsgivaren. Källan till registerkartan |
 | `etapper.md` | Etappprotokoll: vad som är verifierat och vad som inte är det |
-| `laptop/larmregler.py` | Skapar de sex larmreglerna i Grafana. Körs en gång |
+| `laptop/larmregler.py` | Skapar de fyra larmreglerna i Grafana. Körs en gång |
 | `laptop/requirements.txt` | Pinnade versioner av pymodbus, paho-mqtt och pyserial |
 | `Makefile` | Genvägar. Skriv `make` för att se dem |
 | `laptop/config.json` | Intervall, uppvärmningstid, adresser. Skapas automatiskt |
@@ -588,8 +571,8 @@ Medvetna genvägar som måste åtgärdas innan skarp drift:
 - Ingen övervakning av att plattformen själv lever.
 - Ingen säkerhetskopiering av databasen.
 
-För utveckling på en laptop är allt detta acceptabelt. För en kommunal pilot
-är det inte det.
+För utveckling på en laptop är allt detta acceptabelt. För en pilot på en
+gård är det inte det.
 
 ### K-02 — en känd och medveten skuld
 
@@ -601,15 +584,15 @@ giltighetstid och ett saknat lösenord ger alla samma rad i loggen som ett
 täckningsbortfall — `ingen kontakt med brokern` — och den tvetydigheten är
 dyr just nu.
 
-Skulden ska betalas **innan piloten i Vombsjön**, inte innan nästa etapp.
+Skulden ska betalas **innan första piloten på en gård**, inte innan nästa etapp.
 
-Pollaren har sin del förberedd sedan 2026-08-10, avstängd. Att slå på den är
+Pollaren har sin del förberedd, avstängd. Att slå på den är
 en konfigändring, inte en omskrivning:
 
 ```json
 "mqtt": {
   "host": "din-server", "port": 8883,
-  "topic": "limna/HV-001/measurements",
+  "topic": "limna/LIMNA-001/measurements",
   "tls": {"enabled": true, "ca_cert": "/etc/limna/ca.crt"},
   "username_env": "LIMNA_MQTT_USER",
   "password_env": "LIMNA_MQTT_PASS"

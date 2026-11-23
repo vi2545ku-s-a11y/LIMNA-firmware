@@ -50,9 +50,11 @@ DB_FILE = os.path.join(HERE, "buffer.db")
 sensor_profiles.use_config(CONFIG_FILE)
 
 DEFAULT_CONFIG = {
-    "buoy_id": "HV-001",
-    "buoy_name": "Vombsjon Nord",
-    "position": {"lat": 55.6712, "lon": 13.5891},
+    # The pond the buoy is tested in. Position is a placeholder near Lund
+    # until the pilot farm is chosen -- change it, the dashboard map uses it.
+    "buoy_id": "LIMNA-001",
+    "buoy_name": "Bevattningsdamm test",
+    "position": {"lat": 55.7047, "lon": 13.1910},
 
     # WHICH BUS THE SENSORS HANG OFF.
     #
@@ -73,7 +75,7 @@ DEFAULT_CONFIG = {
     # K-02: tls off and no credentials is the laptop setup, deliberately.
     # See the comment above flush() for what turning it on requires.
     "mqtt": {"host": "127.0.0.1", "port": 1883,
-             "topic": "limna/HV-001/measurements",
+             "topic": "limna/LIMNA-001/measurements",
              "tls": {"enabled": False, "ca_cert": None, "insecure": False},
              "username_env": "LIMNA_MQTT_USER",
              "password_env": "LIMNA_MQTT_PASS"},
@@ -121,7 +123,10 @@ DEFAULT_CONFIG = {
         "floor_v": 10.8,
     },
 
-    "warmup_s": 90,
+    # 30 s follows the pH probe's stated ORP response time, the slowest
+    # figure either datasheet gives. It is still an assumption about
+    # START-UP, not a measurement -- measure it first.
+    "warmup_s": 30,
     "retries": 3,
 
     # F-12: the limits the BUOY checks for itself, so it can tell an alarming
@@ -135,31 +140,27 @@ DEFAULT_CONFIG = {
     # Neither replaces the other -- if the buoy is wrong the server still
     # alarms, and if the server is down the measurement still went out early.
     "alarm_limits": {
-        "_krav": ("O-08: larmnivaer per parameter faststalls av Swedamm "
-                  "tillsammans med kommunen, for den faktiska pilotplatsen. "
-                  "Talen nedan ar alltsa inte vara att satta."),
-        "_placeholder": ("PLACEHOLDER -- ersatts fore pilot: ph, turb, temp, "
-                         "do_d. Endast do, batt och temp_d ar beslutade "
-                         "(samma varden som larmreglerna i Grafana). ec och "
-                         "lvl har medvetet inga granser, se nedan."),
-        "do": {"low": 5.0, "high": None},
-        "turb": {"low": None, "high": 100.0},
+        "_krav": ("Larmnivaerna bestams tillsammans med bonden, for den "
+                  "faktiska dammen. Talen nedan ar inte vara att satta."),
+        "_placeholder": ("PLACEHOLDER -- ersatts fore pilot: ph, orp och "
+                         "turb. Endast batt ar beslutad (samma varde som "
+                         "larmregeln i Grafana)."),
 
-        # ec har INGA granser med avsikt. Driftomradet ar 50-300 uS/cm och en
-        # granss pa 1000 hade aldrig lost ut -- en grans som aldrig loser ut
-        # ar samre an ingen alls, for den ser ut som ett skydd. Vilket varde
-        # som ar meningsfullt for Vombsjon ar en fraga for O-08.
-        "ec": {"low": None, "high": None},
+        # Bevattningsvatten trivs ungefar mellan pH 6,5 och 8,4. Over 9
+        # fastnar kalk i droppslangar och vissa bekampningsmedel tappar
+        # verkan; under 6 angrips metall. Talen ar en startpunkt, inte
+        # dammens granser.
+        "ph": {"low": 6.0, "high": 9.0},
 
-        "ph": {"low": 6.0, "high": 9.5},
+        # Ingen grans an. Lagt eller negativt ORP betyder syrefritt vatten,
+        # men var gransen gar beror pa dammen. Satts pa plats.
+        "orp": {"low": None, "high": None},
 
-        # Nivan ar platsberoende: vad som ar hogvatten beror pa var bojen
-        # ligger och hur djupt den ar forankrad. Satts pa plats.
-        "lvl": {"low": None, "high": None},
+        # Grumligt vatten satter igen filter och droppare. 50 NTU ar en
+        # startpunkt; regn ger tillfalliga toppar over den.
+        "turb": {"low": None, "high": 50.0},
 
-        "temp": {"low": None, "high": 25.0},
-        "temp_d": {"low": None, "high": 1.0},
-        "do_d": {"low": None, "high": 1.0},
+        "temp": {"low": None, "high": None},
         "batt": {"low": 12.4, "high": None},
     },
 
@@ -192,10 +193,9 @@ DEFAULT_CONFIG = {
     # which is short enough to actually test.
     "stuck_cycles": 24,
 
-    # Sensors that are only fitted sometimes. "do2" is the second oxygen
-    # sensor of requirement U-04, mounted for the field test so the gap
-    # between the two can measure biological fouling. Empty is the normal
-    # buoy.
+    # Sensors that are only fitted sometimes, named by sensor id. A sensor
+    # marked "valfri" in the profile is left out unless it is listed here.
+    # The pond profile has none; empty is the normal buoy.
     "optional_sensors": [],
 
     # Two switched power channels instead of one (E-11, E-12). Default off:
@@ -205,9 +205,9 @@ DEFAULT_CONFIG = {
     "split_rail": False,
 
     "_note": ("measure_interval_s is 60 here so you see results quickly. "
-              "The real buoy uses 900 (15 min). warmup_s 90 is the assumed "
-              "value from the energy budget -- measure the real one and "
-              "correct it here first of all."),
+              "The real buoy uses 900 (15 min). warmup_s 30 is the pH "
+              "probe's ORP response time, not a measured start-up time -- "
+              "measure the real one and correct it here first of all."),
 }
 
 # THE REGISTER MAP COMES FROM sensor_profiles.py
@@ -221,37 +221,36 @@ DEFAULT_CONFIG = {
 # fault the profile exists to prevent.
 PROFILE = sensor_profiles.load_profile()
 
-# One row per sensor: unit, key, label, addr, scale, signed, scale_register,
-# rail, warmup_s, range. A scale of None means the scale is not fixed and has
-# to be asked for -- see read_scale_from_sensor() below.
+# One row per measured VALUE: unit, key, label, addr, scale, signed, rail,
+# warmup_s, range. The pH probe gives two rows, pH and ORP, with the same
+# unit -- it is one device answering for two quantities.
 SENSORS = sensor_profiles.value_specs(PROFILE)
 
-# THE FOUR THERMOMETERS
+# THE THERMOMETERS
 #
-# Four of the five sensors measure water temperature. Only one number goes in
-# the payload, from the conductivity sensor -- it has the best resolution and
-# is signed, so it can express sub-zero water. The other three are read as a
-# CROSS-CHECK, not as extra data.
+# Every sensor that has a thermometer is read. Only one number goes in the
+# payload, from the sensor the profile names in temp_primar. The others are
+# read as a CROSS-CHECK, not as extra data. In the pond profile both sensors
+# have one, so the cross-check below is live.
 #
-# Four instruments in the same water should agree to within their calibration
-# error, a few tenths of a degree. When one of them starts walking away from
-# the other three, that sensor's board is drifting -- and drift is the failure
-# that nothing else here catches, because a drifting sensor keeps answering
-# and keeps looking plausible. It does not stop working. It starts lying.
+# Two instruments in the same water should agree to within their calibration
+# error, a few tenths of a degree. When one walks away from the other, that
+# sensor's board is drifting -- and drift is the failure that nothing else
+# here catches, because a drifting sensor keeps answering and keeps looking
+# plausible. It does not stop working. It starts lying.
 #
-# So instead of six temperature fields the payload carries one number, temp_d:
-# the largest gap between any two of the four. Nine bytes for a fault we
-# otherwise have no way of seeing.
+# So once there are two or more, the payload carries one extra number,
+# temp_d: the largest gap between any two of them.
 TEMP_SENSORS = sensor_profiles.temp_specs(PROFILE)
 TEMP_PRIMARY_UNIT = sensor_profiles.temp_primary_unit(PROFILE)
 
 # ---------------------------------------------------------------------------
 # THE TWO POWER CHANNELS  (requirements E-11, E-12)
 # ---------------------------------------------------------------------------
-# The awkward fact from the datasheets: the two sensors that draw the most
-# current are the two that are ready fastest. Holding all five powered for 90
-# seconds because the oxygen sensor needs that long is what makes the November
-# energy balance come out at zero.
+# The turbidity probe is assumed ready in seconds; the pH probe's electrodes
+# need half a minute. Holding the turbidity probe powered for that half
+# minute only because the pH probe needs it is energy spent on nothing -- and
+# the turbidity probe is the hungrier of the two.
 #
 # With split_rail on, the fast channel is switched on, read and cut while the
 # slow one is still settling. Which sensor sits on which channel, and how long
@@ -272,10 +271,25 @@ def rails_in_profile():
 
 
 def rail_members(rail):
-    """The sensors on one channel. rail None means every sensor at once."""
+    """The values read on one channel. rail None means every channel at once."""
     if rail is None:
         return list(SENSORS)
     return [spec for spec in SENSORS if spec["rail"] == rail]
+
+
+def rail_sensors(rail):
+    """The DEVICES on one channel, one row per bus address.
+
+    rail_members() gives one row per value, so the pH probe appears twice.
+    Anything that counts sensors or adds up their power has to use this
+    instead, or the pH probe is counted -- and its current drawn -- twice.
+    """
+    seen, out = set(), []
+    for spec in rail_members(rail):
+        if spec["unit"] not in seen:
+            seen.add(spec["unit"])
+            out.append(spec)
+    return out
 
 
 def rail_warmup(rail, cfg):
@@ -300,22 +314,22 @@ def rail_warmup(rail, cfg):
 # ---------------------------------------------------------------------------
 # THE HYPOTHESIS: a sensor that has not settled yet answers with 0, or with
 # some other defined invalid value, rather than with a wrong number. If that
-# holds, the poller does not have to wait a fixed 90 seconds -- it can read
+# holds, the poller does not have to wait a fixed 60 seconds -- it can read
 # until the answer becomes valid and cut the power the moment it has one.
 # That would take the single largest item in the energy budget and turn it
 # from an assumption into a measurement.
 #
-# WHERE IT COMES FROM: sensor_databla.md chapter 4. Seeed's CO2 sensor is
-# documented as returning 0 before its warm-up time has passed. NOTHING says
-# our five do the same. It is a clue about a different product from the same
-# manufacturer, and that is all it is.
+# WHERE IT COMES FROM: some sensors are documented as returning 0 before
+# their warm-up time has passed. NOTHING says the Seeed pH/ORP probe or the
+# turbidity probe do the same. It is a clue about other products, nothing
+# more.
 #
 # WHY IT IS DANGEROUS IF WRONG: if a sensor instead answers with a value that
 # is merely unsettled -- which is exactly what our simulator does, and what
 # the warm-up curves in etapp 3 show -- then this accepts the first number it
-# sees. Oxygen read at one second instead of forty comes back about a third
-# too low, looks entirely plausible, and would quietly become the whole
-# dataset. The energy saving would be real and the data would be worthless.
+# sees. pH read at one second instead of thirty comes back far too low, looks
+# like a number, and would quietly become the whole dataset. The energy
+# saving would be real and the data would be worthless.
 #
 # THEREFORE: default off, and it must not be turned on against real hardware
 # until somebody has powered a sensor up with a meter on it and watched what
@@ -344,8 +358,9 @@ def wait_until_valid(client, cfg, rail, log):
         for spec in list(kvar):
             raw, _ = read_raw(client, spec["unit"], spec["addr"], 1)
             # 0 is the hypothesis' "not ready yet". A real reading of exactly
-            # zero is possible for some quantities -- turbidity in distilled
-            # water -- which is one more reason this needs verifying.
+            # zero is possible -- ORP crosses zero in water without oxygen,
+            # and clear water reads close to 0 NTU -- which is one more
+            # reason this needs verifying.
             if raw not in (None, 0):
                 kvar.remove(spec)
                 log(f"    [adaptiv]  {spec['label']:<16} gav varde efter "
@@ -373,22 +388,21 @@ def rail_saving(cfg):
     Two savings are counted separately, because they are not the same kind of
     thing:
 
-        the split itself   the fast group stops being held on for the oxygen
-                           sensor's sake. That is what the extra MOSFET buys
+        the split itself   the fast group stops being held on for the pH
+                           probe's sake. That is what the extra MOSFET buys
                            and it does not go away.
-        the shorter wait   the slow group waits its own assumed 40 s instead
-                           of the rail's assumed 90. That comes from trusting
-                           a guess, not from any hardware change, and it
-                           vanishes the day the 40 s is measured and turns
-                           out to be 70.
+        the shorter wait   the slow group waits its own assumed time instead
+                           of the rail's. That comes from trusting a guess,
+                           not from any hardware change, and it vanishes the
+                           day the guess is measured and turns out longer.
 
-    Power is missing for the level probe, so every watt figure here is a
-    lower bound and says which sensors it left out.
+    A sensor with no published power figure would make every watt figure
+    here a lower bound; the result says which ones it left out, if any.
     """
     undivided = cfg["warmup_s"]
     out = {}
     for rail in rails_in_profile():
-        members = rail_members(rail)
+        members = rail_sensors(rail)
         warm = rail_warmup(rail, cfg)
         saved_s = max(0.0, undivided - warm)
         low = high = 0.0
@@ -396,7 +410,7 @@ def rail_saving(cfg):
         for spec in members:
             effekt = spec["effekt_w"]
             if effekt is None:
-                okand.append(spec["label"])
+                okand.append(spec["sensor_label"])
             else:
                 low += effekt[0] * saved_s
                 high += effekt[1] * saved_s
@@ -437,8 +451,7 @@ def energy_lines(cfg):
         riktig = 86400 / 900
         lines.append(
             f"  Vid riktiga 15 min ({riktig:.0f} matningar): "
-            f"{low * riktig / 3600:.1f}-{high * riktig / 3600:.1f} Wh/dygn "
-            f"av budgetens 13,39")
+            f"{low * riktig / 3600:.1f}-{high * riktig / 3600:.1f} Wh/dygn")
 
     okanda = sorted({namn for s in saving.values()
                      for namn in s["okand_effekt"]})
@@ -455,7 +468,7 @@ def rail_power_w(rail):
     bound -- rail_power_unknown() says which ones are missing.
     """
     low = high = 0.0
-    for spec in rail_members(rail):
+    for spec in rail_sensors(rail):
         if spec["effekt_w"] is not None:
             low += spec["effekt_w"][0]
             high += spec["effekt_w"][1]
@@ -463,18 +476,18 @@ def rail_power_w(rail):
 
 
 def rail_power_unknown(rail):
-    return [spec["label"] for spec in rail_members(rail)
+    return [spec["sensor_label"] for spec in rail_sensors(rail)
             if spec["effekt_w"] is None]
 
 
 def log_rail_time(cfg, on_times, log):
     """Log what each channel COST, in watt-seconds -- not just how long it ran.
 
-    Seconds are the wrong quantity to judge E-12 by and make the change look
-    marginal: dividing the rail shortens the cycle by a few seconds while
-    cutting the energy by around three quarters, because the fast group is
-    both the thirsty one and the one that gets switched off early. A cycle
-    time says nothing about that. Watt-seconds do.
+    Seconds are the wrong quantity to judge E-12 by: dividing the rail
+    shortens the cycle by a few seconds, but what it saves depends on how
+    much the fast group DRAWS while it would otherwise wait. A cycle time says
+    nothing about that. Watt-seconds do. (Both datasheets give upper bounds,
+    so this line is an upper bound too until the currents are measured.)
 
     In undivided mode the line reports what the division WOULD have cost, so
     the number is there when E-12 is decided -- without flipping the flag and
@@ -524,7 +537,7 @@ def log_rail_time(cfg, on_times, log):
             f"-- {besparing:.0f} procent mindre energi")
 
         # How much of that is the split, and how much is simply not waiting
-        # 90 s for a sensor the profile believes needs 40? The second half
+        # longer than the slowest sensor in the profile needs? The second half
         # costs no hardware at all -- it is one line in config.json -- so
         # keeping them apart stops the extra MOSFET being credited with a
         # saving it did not make.
@@ -542,9 +555,9 @@ def decode_register(raw, scale, signed):
 
     Modbus has no notion of sign: a register is 16 bits and it is the reader
     who has to know whether to treat them as two's complement. Get it wrong
-    on a signed register and -2.51 C comes back as 652.85 C, which is not an
-    obviously wrong number in a log full of other numbers. Hence this is done
-    in one place for every sensor rather than per sensor.
+    on a signed register and an ORP of -12.5 mV comes back as 6541.1 mV,
+    which is not an obviously wrong number in a log full of other numbers.
+    Hence this is done in one place for every sensor rather than per sensor.
     """
     if signed and raw >= 0x8000:
         raw -= 0x10000
@@ -555,8 +568,8 @@ def decode_register(raw, scale, signed):
 # LOCAL BUFFER  (requirement K-03, K-04)
 # ---------------------------------------------------------------------------
 # Measurements are written to disk BEFORE any attempt is made to send them.
-# Doing it the other way round loses data every time coverage drops, which in
-# a lake in Skane is often. On the ESP32 this becomes an SD card; the logic is
+# Doing it the other way round loses data every time the link drops, which out
+# at a pond is often. On the ESP32 this becomes an SD card; the logic is
 # identical.
 
 class Buffer:
@@ -608,7 +621,7 @@ class Buffer:
 # and polling continues.
 
 def read_raw(client, unit, addr, retries):
-    """Read one register with retries. Returns the raw 16-bit value."""
+    """Read one 16-bit register with retries. Returns (raw value, error)."""
     for attempt in range(1, retries + 1):
         try:
             rr = client.read_holding_registers(addr, count=1, slave=unit)
@@ -622,13 +635,13 @@ def read_raw(client, unit, addr, retries):
     return None, IOError("retries exhausted")
 
 
-def read_sensor(client, spec, scale, retries, log):
+def read_sensor(client, spec, retries, log):
     raw, exc = read_raw(client, spec["unit"], spec["addr"], retries)
     if raw is None:
         log(f"    {spec['label']:<16} SVARAR INTE efter "
             f"{retries} forsok ({type(exc).__name__})")
         return None, "no_response"
-    return decode_register(raw, scale, spec["signed"]), None
+    return decode_register(raw, spec["scale"], spec["signed"]), None
 
 
 # ---------------------------------------------------------------------------
@@ -640,7 +653,7 @@ def read_sensor(client, spec, scale, retries, log):
 #
 # 1. AVERAGE SEVERAL READINGS?  Yes -- three.
 #
-#    The expensive part of a measurement is the warm-up: ninety seconds with
+#    The expensive part of a measurement is the warm-up: half a minute with
 #    the rail powered. Two extra reads cost some twenty milliseconds of bus
 #    time on a rail that is already on, so they are free in every sense the
 #    energy budget cares about. What they buy is a defence against the single
@@ -668,16 +681,17 @@ def read_sensor(client, spec, scale, retries, log):
 #
 #    An impossible reading is evidence: a broken sensor, a wrong scale
 #    factor, or a signed register read as unsigned -- the fault that turns
-#    -2.51 C into 652.85. Discarding it destroys the evidence and leaves a
+#    -12.5 mV into 6541.1. Discarding it destroys the evidence and leaves a
 #    gap that looks like a communication problem, which sends the next person
 #    looking in the wrong place entirely. Substituting the previous value
 #    would be worse, and is exactly what EL-03 forbids.
 #
-#    Only pH has a stated range in this profile, so only pH can be checked.
-#    The other four are unchecked, and the self test says so rather than
-#    letting anyone assume otherwise.
+#    Only values with a stated range can be checked. In the pond profile all
+#    three have one (pH 0-14, ORP +-2000 mV, turbidity 0-1000 NTU). The self
+#    test lists any unchecked ones rather than letting anyone assume
+#    otherwise.
 
-def sample_sensor(client, spec, scale, cfg, log):
+def sample_sensor(client, spec, cfg, log):
     """Read one sensor several times over. Returns (value, fault or None).
 
     The value is the median of the readings. A fault describes what was odd
@@ -690,7 +704,7 @@ def sample_sensor(client, spec, scale, cfg, log):
 
     varden = []
     for _ in range(antal):
-        value, err = read_sensor(client, spec, scale, cfg["retries"], log)
+        value, err = read_sensor(client, spec, cfg["retries"], log)
         if err:
             # A sensor that did not answer the first time will not answer the
             # next two either, and each attempt costs a full round of retries
@@ -710,13 +724,14 @@ def sample_sensor(client, spec, scale, cfg, log):
     # until now nothing in the poller looked for it.
     #
     # Two conditions, not one. A purely relative threshold cries wolf at small
-    # values: turbidity is quantised to 0.1 NTU, so in clear water at 0.4 NTU
-    # a single step of the last digit is 25 per cent and nothing is wrong at
-    # all. The spread therefore also has to exceed two steps of the register's
-    # own resolution, which the profile knows because it knows the scale.
+    # values: turbidity is quantised to tenths of an NTU, so in clear water
+    # at 0.4 NTU a single step of the last digit is 25 per cent and nothing
+    # is wrong at all. The spread therefore also has to exceed two steps of
+    # the register's own resolution, which the profile knows because it
+    # knows the scale.
     spann = max(varden) - min(varden)
     grans = sampling.get("spread_warn_frac", 0.10)
-    minsta_spann = 2.0 / scale if scale else 0.0
+    minsta_spann = 2.0 * spec["resolution"]
     if (len(varden) > 1 and varde and abs(spann / varde) > grans
             and spann > minsta_spann):
         fel = "brusig"
@@ -734,42 +749,12 @@ def sample_sensor(client, spec, scale, cfg, log):
     return varde, fel
 
 
-# Some sensors do not have a fixed scale. Our level probe holds the number of
-# decimal places the value register uses in a register of its own, and the
-# real scale is 10 to that power. Which register that is comes from the
-# profile. Reading it once at start-up and remembering it is what the firmware
-# will do -- asking every cycle would waste bus time and current on a number
-# that cannot change while the buoy is in the water.
-_scale_cache = {}
-
-
-def read_scale_from_sensor(client, spec, retries, log):
-    unit = spec["unit"]
-    if unit in _scale_cache:
-        return _scale_cache[unit]
-
-    raw, exc = read_raw(client, unit, spec["scale_register"], retries)
-    if raw is None:
-        log(f"    {spec['label']:<16} kunde inte lasa skalregistret "
-            f"({type(exc).__name__}), antar millimeter")
-        return 1000                      # not cached: try again next cycle
-    if raw > 4:
-        log(f"    {spec['label']:<16} orimligt antal decimaler ({raw}), "
-            f"antar millimeter")
-        return 1000
-    _scale_cache[unit] = 10 ** raw
-    log(f"  [skala]    {spec['label']}givaren rapporterar {raw} decimaler "
-        f"-> delar med {_scale_cache[unit]}")
-    return _scale_cache[unit]
-
-
 def read_thermometers(client, rail, retries, log):
     """Read the thermometers that sit on one channel.
 
-    Split into "read" and "compare" because with a divided rail the four are
-    not powered at the same moment: two of them answer while the fast channel
-    is up and two while the slow one is. The comparison can only be made once
-    both channels have been through.
+    Split into "read" and "compare" because with a divided rail the
+    thermometers are not all powered at the same moment. The comparison can
+    only be made once both channels have been through.
     """
     readings, faults = {}, {}
     on_rail = {spec["unit"] for spec in rail_members(rail)}
@@ -788,27 +773,25 @@ def read_thermometers(client, rail, retries, log):
 # ---------------------------------------------------------------------------
 # A VALUE THAT HAS STOPPED MOVING  (the "stuck" fault)
 # ---------------------------------------------------------------------------
-# The third member of the family in CLAUDE.md, next to temp_d and do_d: a
-# sensor that keeps answering in time with a plausible number that happens to
-# be wrong. temp_d catches it for the four thermometers and do_d for the
-# oxygen pair, but a frozen pH or a frozen turbidity has nothing to be
-# compared against -- except its own past.
+# The other half of the cross-checks in CLAUDE.md, next to temp_d: a sensor
+# that keeps answering in time with a plausible number that happens to be
+# wrong. temp_d needs a second thermometer to compare against; a frozen
+# pH, ORP or turbidity reading has nothing to be compared against -- except
+# its own past.
 #
-# So that is what this compares it to. A real lake never gives the same
-# reading twice: dissolved oxygen swings over the day, turbidity wanders,
-# even the level moves by a millimetre. A value that is bit-identical for
-# hours is a register that stopped being written, not water that stopped
-# changing.
+# So that is what this compares it to. A real pond never gives the same
+# reading twice: pH and ORP swing over the day, and turbidity moves when the
+# pond is pumped from or rained on. A value that is bit-identical for hours
+# is a register that stopped being written, not water that stopped changing.
 #
-# It is a SUSPICION, not a verdict. Conductivity is quantised to whole uS/cm
-# and could sit on the same integer for a long time in still water, so the
-# flag says "misstankt" and a human decides. False suspicion costs a look at
-# a graph; a missed frozen sensor costs a season of wrong data.
+# It is a SUSPICION, not a verdict. A coarsely quantised value can honestly
+# sit still for a while, so the flag says "misstankt" and a human decides.
+# False suspicion costs a look at a graph; a missed frozen sensor costs a
+# season of wrong data.
 #
-# The count lives in RAM and starts over when the poller restarts, exactly as
-# it will on the ESP32 after a reboot. That is a deliberate limitation, not
-# an oversight: a fault that survives a restart is worth storing, and this
-# one is not worth an extra table.
+# The count lives in RAM. On the laptop that is fine. ON THE ESP32 IT IS NOT:
+# deep sleep restarts the program every cycle, so a count in RAM never gets
+# past one. The firmware keeps it in RTC memory -- see firmware/README.md.
 _stuck_history = {}          # key -> [value, number of cycles it has been that]
 
 
@@ -816,10 +799,10 @@ def stuck_limit(key, cfg):
     """How many identical readings this parameter is allowed, from the profile.
 
     Per sensor, because the number follows from the register's RESOLUTION and
-    not from the clock. Conductivity is quantised to whole uS/cm and can
-    honestly sit on the same integer for hours in still water; pH, quantised
-    to hundredths, cannot. One global threshold either cries wolf about the
-    first or sleeps through the second.
+    not from the clock. A value quantised to whole units can honestly sit on
+    the same number for hours in still water; one quantised to hundredths
+    cannot. One global threshold either cries wolf about the first or sleeps
+    through the second.
 
     config.json's stuck_cycles is the fallback, used for anything the profile
     does not name -- temp, for instance, which is not a sensor of its own.
@@ -835,8 +818,8 @@ def check_stuck(values, cfg, log):
     granskade = [spec["key"] for spec in SENSORS] + ["temp"]
     # batt is deliberately left out: it is hardcoded to 13.1 until there is a
     # real ADC, so it would be flagged every single cycle and teach whoever
-    # reads the log to ignore the flag. temp_d and do_d are left out too --
-    # they are comparisons, not measurements.
+    # reads the log to ignore the flag. temp_d is left out too --
+    # it is a comparison, not a measurement.
     flags = {}
 
     for key in granskade:
@@ -863,35 +846,10 @@ def check_stuck(values, cfg, log):
     return flags
 
 
-def compare_oxygen(values, log):
-    """U-04: the gap between the two oxygen sensors, when both are fitted.
-
-    Same idea as temp_d, for the failure that is specific to an optical
-    oxygen sensor: biological fouling. A biofilm grows over the window, less
-    light comes back, and the sensor reads low -- while answering in time,
-    every time, with a number that looks like a lake. No fixed limit, no rate
-    of change and no silence alarm can see that.
-
-    Two identical sensors in the same water can. They differ by their
-    calibration error while both are clean, and the difference grows as one
-    of them fouls. That difference IS the measurement the field test is for:
-    it says how fast fouling sets in, and therefore how often somebody has to
-    row out and wipe the sensor.
-
-    Adds nothing when the second sensor is not fitted, which is the normal
-    case -- it comes off again after the trial.
-    """
-    if "do" not in values or "do2" not in values:
-        return
-    values["do_d"] = round(abs(values["do"] - values["do2"]), 2)
-    note = "  <- givarna ar oense" if values["do_d"] > 0.5 else ""
-    log(f"    {'  syreskillnad':<16} {values['do_d']}{note}")
-
-
 def compare_thermometers(readings, log):
-    """Turn the four readings into one temperature and one spread.
+    """Turn the thermometer readings into one temperature and one spread.
 
-    Returns (temp, spread). temp comes from the conductivity sensor; spread is
+    Returns (temp, spread). temp comes from the profile's temp_primar; spread is
     the largest gap between any two that answered, or None when fewer than two
     did -- one reading cannot disagree with itself.
     """
@@ -905,7 +863,7 @@ def compare_thermometers(readings, log):
         # The usual source is silent, so fall back to any other thermometer
         # rather than dropping temperature from the measurement entirely.
         unit, temp = sorted(readings.items())[0]
-        log(f"    {'temperatur':<16} konduktivitetsgivaren tyst, "
+        log(f"    {'temperatur':<16} ordinarie termometer tyst, "
             f"anvander enhet {unit}")
 
     spread = None
@@ -1023,11 +981,7 @@ def measure_rail(cfg, rail, log):
             time.sleep(warm)
 
         for spec in rail_members(rail):
-            scale = spec["scale"]
-            if scale is None:
-                scale = read_scale_from_sensor(client, spec, cfg["retries"],
-                                               log)
-            value, err = sample_sensor(client, spec, scale, cfg, log)
+            value, err = sample_sensor(client, spec, cfg, log)
             if err:
                 faults[spec["key"]] = err
             # A flagged value is still a value. Only a sensor that said
@@ -1054,8 +1008,8 @@ def measure_cycle(cfg, log):
 
     With split_rail off this is one channel carrying every sensor, which is
     the buoy as it is built today. With it on, each channel is powered, read
-    and cut in turn -- fast group first, so the two thirsty sensors are off
-    again long before the oxygen sensor has settled.
+    and cut in turn -- fast group first, so the turbidity probe is off again
+    long before the pH probe has settled.
     """
     split = bool(cfg.get("split_rail", False))
     rails = rails_in_profile() if split else [None]
@@ -1077,14 +1031,15 @@ def measure_cycle(cfg, log):
     values = {spec["key"]: values[spec["key"]] for spec in SENSORS
               if spec["key"] in values}
 
-    compare_oxygen(values, log)
     temp, spread = compare_thermometers(temps, log)
     if temp is not None:
         values["temp"] = temp
         log(f"    {'temperatur':<16} {temp}")
     if spread is not None:
         values["temp_d"] = spread
-        note = "  <- givarna ar oense" if spread > 0.5 else ""
+        # Beyond what the two datasheets' accuracy figures allow together.
+        oense = spread > sensor_profiles.TEMP_D_TOLERANCE_C
+        note = "  <- givarna ar oense" if oense else ""
         log(f"    {'  spridning':<16} {spread}{note}")
 
     # Has anything stopped moving? Done after temp is in, so the temperature
@@ -1130,7 +1085,7 @@ def measure_cycle(cfg, log):
 #
 #     "mqtt": {
 #         "host": "din-server", "port": 8883,
-#         "topic": "limna/HV-001/measurements",
+#         "topic": "limna/LIMNA-001/measurements",
 #         "tls": {"enabled": true, "ca_cert": "/etc/limna/ca.crt"},
 #         "username_env": "LIMNA_MQTT_USER",
 #         "password_env": "LIMNA_MQTT_PASS"
@@ -1162,7 +1117,7 @@ def flush(buffer, cfg, log):
     """Send everything not yet sent. Called after every measurement.
 
     NOTHING in here is allowed to raise. Losing the link halfway through a
-    batch is not an edge case at a lake in Skane, it is the normal case --
+    batch is not an edge case out at a pond, it is the normal case --
     and it is at its worst right after an outage, when the queue is long and
     the send takes longest. A crash there costs far more than the batch: the
     local buffer only protects data that the measurement loop is still alive
@@ -1191,7 +1146,7 @@ def flush(buffer, cfg, log):
         if tls.get("enabled", False):
             # ca_cert None makes paho use the system trust store, which is
             # what a certificate from a public authority needs. A private CA
-            # -- the likely case for a municipal server -- goes in the file.
+            # -- the likely case for our own server -- goes in the file.
             cli.tls_set(ca_certs=tls.get("ca_cert"))
             if tls.get("insecure", False):
                 # Skips the hostname check. Only for a first connection test
@@ -1256,13 +1211,14 @@ def flush(buffer, cfg, log):
 
 
 # ---------------------------------------------------------------------------
-# WHEN TO SEND  (requirements F-12, and the modem half of the energy budget)
+# WHEN TO SEND  (requirements F-12, and the radio half of the energy budget)
 # ---------------------------------------------------------------------------
-# Measuring and sending are separate on purpose. The modem is the second
-# largest load after the sensor rail, and most of what it costs is waking up
-# and registering on the network, not moving the bytes. Sending one 199-byte
-# measurement every 15 minutes therefore costs roughly four times what sending
-# four of them once an hour costs, for exactly the same data.
+# Measuring and sending are separate on purpose. The radio -- WiFi in the
+# prototype, LoRa or a cellular modem later -- is the second largest load
+# after the sensor rail, and for WiFi and cellular most of what it costs is
+# waking up and joining the network, not moving the bytes. Sending each
+# measurement on its own therefore costs several times what sending a batch
+# does, for exactly the same data.
 #
 # So measurements accumulate in the buffer and go out in batches. The buffer
 # was already doing this during outages; this just makes it the normal case.
@@ -1283,7 +1239,7 @@ def bradskande(payload, cfg):
     than an omission. A sensor that has gone quiet leaves no number to
     compare, and inventing one would be the very thing EL-03 forbids. It also
     calls for a service visit rather than immediate action, and the silence
-    rules on the server catch it at the next send anyway -- waking the modem
+    rules on the server catch it at the next send anyway -- waking the radio
     for it costs more than it gives. The fault is recorded in the payload's
     fel field either way.
 
@@ -1307,7 +1263,7 @@ def bradskande(payload, cfg):
     return skal
 
 
-BESLUTADE_GRANSER = {"do", "batt", "temp_d"}    # the rest await O-08
+BESLUTADE_GRANSER = {"batt"}    # the rest are set with the farmer
 
 
 def limit_summary(cfg):
@@ -1334,7 +1290,7 @@ def limit_summary(cfg):
             delar.append(f"{key_visas} >{high}")
     if not delar:
         return "inga satta"
-    return "  ".join(delar) + "   (* = PLACEHOLDER, se O-08)"
+    return "  ".join(delar) + "   (* = PLACEHOLDER, satts med bonden)"
 
 
 # ---------------------------------------------------------------------------
@@ -1353,7 +1309,7 @@ def limit_summary(cfg):
 # the old behaviour. "sim" drains a starting voltage at a set rate so eco
 # mode, the low battery alarm and the F-12 immediate send can all be
 # provoked without waiting for a real battery to go flat. It is a test aid
-# and models nothing about a real lead-acid battery.
+# and models nothing about a real LiFePO4 battery.
 _battery_started_at = None
 
 
@@ -1464,7 +1420,8 @@ def main():
     print("LIMNA pollare")
     print(f"  Boj              {cfg['buoy_id']}  {cfg['buoy_name']}")
     print(f"  Sensorprofil     {PROFILE['id']}  "
-          f"({len(SENSORS)} givare, {len(TEMP_SENSORS)} termometrar)")
+          f"({len(rail_sensors(None))} givare, {len(SENSORS)} matvarden, "
+          f"{len(TEMP_SENSORS)} termometrar)")
     print(f"  Buss             {bus_description(cfg)}")
     print(f"  Matintervall     {cfg['measure_interval_s']} s")
     print(f"  Sandintervall    {cfg['send_interval_s']} s")
@@ -1483,7 +1440,7 @@ def main():
     if cfg.get("split_rail", False):
         kanaler = "  ".join(
             f"{RAIL_LABEL[rail]} {rail_warmup(rail, cfg):g} s "
-            f"({len(rail_members(rail))} givare)"
+            f"({len(rail_sensors(rail))} givare)"
             for rail in rails_in_profile())
         print(f"  Stromrail        DELAD -- {kanaler}")
     else:
@@ -1510,7 +1467,7 @@ def main():
 
     # EL-05 -- automatic restart after a program fault.
     #
-    # The buoy sits anchored in a lake. Nobody is there to notice a traceback
+    # The buoy sits anchored in a pond. Nobody is there to notice a traceback
     # and start the program again, so an unhandled exception is not a crash,
     # it is a site visit. Every cycle therefore runs inside its own net: log
     # what happened, sleep the normal interval, try again next time round.
@@ -1537,7 +1494,7 @@ def main():
                     matintervall, fonster = current_intervals(cfg, in_eco)
                     # To disk FIRST, always -- K-03. An urgent measurement is
                     # still written before anything is sent, so a limit
-                    # crossing survives a modem that will not come up.
+                    # crossing survives a link that will not come up.
                     buffer.store(payload["t"], payload)
 
                     # The window is measured from the last SUCCESSFUL send, so
@@ -1599,12 +1556,12 @@ def selftest():
 
     print(f"Sensorprofil: {PROFILE['id']}")
     print(f"Buss:         {bus_description(DEFAULT_CONFIG)}\n")
-    print(f"  {'givare':<14} {'register':>8} {'skala':>7} {'typ':<10} rail")
+    print(f"  {'adr':>3} {'falt':<5} {'register':>8} {'skala':>7} {'typ':<10} "
+          f"rail")
     for spec in SENSORS:
-        skala = "ur giv." if spec["scale"] is None else str(spec["scale"])
-        print(f"  {spec['label']:<14} 0x{spec['addr']:04X} {skala:>9} "
-              f"{'signerad' if spec['signed'] else 'osignerad':<10} "
-              f"{spec['rail']}")
+        typ = "signerad" if spec["signed"] else "osignerad"
+        print(f"  {spec['unit']:>3} {spec['key']:<5} 0x{spec['addr']:04X} "
+              f"{spec['scale']:>9} {typ:<10} {spec['rail']}")
 
     # Does the simulator still read the same map as we do? Both build theirs
     # from sensor_profiles.py, so this only fails if somebody has written a
@@ -1621,7 +1578,7 @@ def selftest():
 
     print("\nBuffertlogik\n")
     for i in range(5):
-        buf.store(f"2026-07-27T10:0{i}:00Z", {"do": 8.9 + i * 0.1, "n": i})
+        buf.store(f"2026-07-27T10:0{i}:00Z", {"ph": 7.6 + i * 0.1, "n": i})
     print(f"  5 matningar sparade        -> totalt {buf.counts()[0]}, "
           f"oskickade {buf.counts()[1]}")
 
@@ -1632,7 +1589,7 @@ def selftest():
 
     print("\n  Simulerat tackningsbortfall: 4 matningar utan kontakt")
     for i in range(4):
-        buf.store(f"2026-07-27T11:0{i}:00Z", {"do": 8.0, "n": 100 + i})
+        buf.store(f"2026-07-27T11:0{i}:00Z", {"ph": 7.8, "n": 100 + i})
     print(f"  -> oskickade {buf.counts()[1]}")
 
     print("  Kontakten aterkommer, allt skickas i efterhand")
@@ -1643,62 +1600,34 @@ def selftest():
 
     print("\n  Nyttolast som skickas till brokern:")
     # Built the same way measure_cycle() builds it, so the byte count below is
-    # the real one. Two earlier versions of this self test understated it: one
-    # left out namn and pos (59 bytes), the next used conveniently short
-    # readings and wrote ec as a whole number. decode_register() rounds, so it
-    # always returns a float -- ec goes out as 318.0, never as 318. The values
-    # below are copied from an actual row in buffer.db for that reason.
+    # the real one for the pond profile: pH, ORP, turbidity, the published
+    # temperature and the gap between the two thermometers.
     example = {
         "boj": DEFAULT_CONFIG["buoy_id"],
         "namn": DEFAULT_CONFIG["buoy_name"],
         "t": "2026-07-27T14:00:00+00:00",
         "pos": DEFAULT_CONFIG["position"],
         "batt": 13.1,
-        "do": 9.04, "turb": 3.9, "ec": 318.0, "ph": 8.13, "lvl": 2.371,
-        "temp": 18.29, "temp_d": 0.2,
+        "ph": 7.83, "orp": 239.5, "turb": 6.4, "temp": 18.3, "temp_d": 0.25,
     }
-
-    def size(payload):
-        return len(json.dumps(payload, separators=(",", ":")))
-
-    # Worked out FROM the example rather than written down beside it, so the
-    # breakdown can never drift away from the number actually printed.
-    utan_ph = {k: v for k, v in example.items() if k != "ph"}
-    utan_bada = {k: v for k, v in utan_ph.items() if k != "temp_d"}
 
     js = json.dumps(example, separators=(",", ":"))
     print(f"    {js}")
     print(f"    {len(js)} byte")
     print(f"    Verkliga nyttolaster varierar nagra byte med hur manga")
-    print(f"    decimaler varje matvarde hamnar pa. Uppmatt: 197 till 201.")
-    print(f"    Energibudgeten antar 120. Den siffran stammer inte -- den")
-    print(f"    stamde inte med fyra sensorer heller ({size(utan_bada)} byte).")
-    print(f"    pH la till {len(js) - size(utan_ph)} byte, "
-          f"temperaturkontrollen temp_d {size(utan_ph) - size(utan_bada)}.")
+    print(f"    decimaler varje matvarde hamnar pa.")
     per_month = len(js) * (24 * 60 / 15) * 30 / 1024
-    print(f"    Vid 15 min intervall: {per_month:.0f} KiB mobildata per manad.")
-
-    # U-04: the field test carries two more fields. Worth knowing before the
-    # trial rather than after, since the data plan is bought in advance.
-    falttest = dict(example)
-    falttest["do2"] = 8.98
-    falttest["do_d"] = 0.06
-    js_falt = json.dumps(falttest, separators=(",", ":"))
-    print(f"\n    Under falttest med tva syregivare (U-04): "
-          f"{len(js_falt)} byte")
-    print(f"    do2 och do_d kostar {len(js_falt) - len(js)} byte, "
-          f"{len(js_falt) * (24 * 60 / 15) * 30 / 1024:.0f} KiB per manad.")
+    print(f"    Vid 15 min intervall: {per_month:.0f} KiB data per manad.")
 
     # -- F-12: does the buoy recognise an alarm on its own? --------------
     print("\nF-12: bojen kanner igen ett larm utan servern\n")
     print(f"  Granser: {limit_summary(DEFAULT_CONFIG)}\n")
     fall = [
         ("normal matning", {}),
-        ("syrebrist", {"do": 4.2}),
-        ("pH over gransen", {"ph": 9.8}),
-        ("termometrarna oense", {"temp_d": 1.4}),
-        ("pavaxt pa syregivare 2", {"do2": 6.9, "do_d": 1.6}),
-        ("syregivaren tyst", {"do": None}),
+        ("hogt pH (algblomning)", {"ph": 9.4}),
+        ("grumligt efter regn", {"turb": 72.0}),
+        ("lagt batteri", {"batt": 12.2}),
+        ("pH-givaren tyst", {"ph": None, "orp": None}),
     ]
     for vad, andring in fall:
         matning = dict(example)
@@ -1722,9 +1651,9 @@ def selftest():
     print("\nDatabehandling: tre avlasningar, median\n")
     import statistics
     fall = [
-        ("normal spridning", [8.90, 8.91, 8.89]),
-        ("ett skrapvarde", [8.90, 0.12, 8.91]),
-        ("tva skrapvarden", [8.90, 0.12, 0.11]),
+        ("normal spridning", [7.83, 7.84, 7.82]),
+        ("ett skrapvarde", [7.83, 0.12, 7.84]),
+        ("tva skrapvarden", [7.83, 0.12, 0.11]),
     ]
     print(f"  {'fall':<18} {'avlasningar':<22} {'median':>8} {'medel':>8}")
     for vad, varden in fall:
@@ -1759,52 +1688,68 @@ def selftest():
             for spec in SENSORS) else "config.json"
         print(f"  {key:<6} {n:>4} matningar  ({n * 900 / 3600:>4.0f} h)  "
               f"ur {varifran}")
-    print("\n  ec har hogre troskel med avsikt: den mater i hela uS/cm och "
-          "kan")
-    print("  arligt sta pa samma heltal i timmar. pH kvantiserar till "
-          "hundradelar")
-    print("  och gor det aldrig.")
+    print("\n  Troskeln ligger per givare i profilen, eftersom den foljer")
+    print("  registrets upplosning: ett grovt kvantiserat varde kan arligt")
+    print("  sta still lange, ett fint kan det inte.")
 
     print("\n  Demonstration med temperaturen, troskel sankt till 5:\n")
     _stuck_history.clear()
     prov["stuck_cycles"] = 5              # temp takes its limit from config
     tyst = lambda *_: None
-    print(f"  {'matning':>8} {'do':>7} {'temp':>7}  flaggat")
+    print(f"  {'matning':>8} {'ph':>7} {'temp':>7}  flaggat")
     for i in range(1, 8):
-        # Everything moves a little, the way a lake does. Only temp is frozen.
-        matning = {"do": round(8.90 + i * 0.03, 2),
-                   "turb": round(4.1 + i * 0.1, 1),
-                   "ec": 312.0 + i,
-                   "ph": round(8.10 + i * 0.01, 2),
-                   "lvl": round(2.340 + i * 0.001, 3),
+        # Everything moves a little, the way a pond does. Only temp is frozen.
+        matning = {"ph": round(7.60 + i * 0.03, 2),
+                   "orp": round(250.0 + i * 1.5, 1),
+                   "turb": round(6.0 + i * 0.3, 1),
                    "temp": 18.20}
         flaggor = check_stuck(matning, prov, tyst)
-        print(f"  {i:>8} {matning['do']:>7} {matning['temp']:>7}  "
+        print(f"  {i:>8} {matning['ph']:>7} {matning['temp']:>7}  "
               f"{', '.join(sorted(flaggor)) or '-'}")
-    print("\n  Temperaturen flaggas fran femte matningen, syret aldrig -- "
+    print("\n  Temperaturen flaggas fran femte matningen, pH aldrig -- "
           "det ror sig.")
     print("  Flaggan hamnar i fel-faltet: \"fel\":{\"temp\":\"stuck\"}.")
     _stuck_history.clear()
 
-    print("\nSignerad avkodning\n")
+    # -- decoding, checked against the manuals' own example frames --------
+    # These are the bytes Seeed printed in the manuals, with the values they
+    # say the bytes mean. If the profile or decode_register() is wrong, this
+    # is where it shows -- before a real sensor is anywhere near the bus.
+    print("\nAvkodning mot manualernas egna exempelsvar\n")
+    regs_ph = {0x0000: 0x09F1, 0x0001: 0x030F, 0x0002: 0x095B}
+    regs_turb = {0x0100: 0x00C0, 0x0101: 0x03D9}
+    facit = {"ph": 7.83, "orp": 239.5, "turb": 98.5}
+    alla_ok = True
+    for spec in SENSORS:
+        regs = regs_ph if spec["unit"] == 1 else regs_turb
+        varde = decode_register(regs[spec["addr"]], spec["scale"],
+                                spec["signed"])
+        ok = abs(varde - facit[spec["key"]]) < 1e-6
+        alla_ok = alla_ok and ok
+        print(f"  {spec['key']:<5} 0x{regs[spec['addr']]:04X} -> {varde:>7g}  "
+              f"manualen sager {facit[spec['key']]:<6g} "
+              f"{'OK' if ok else 'FEL'}")
+    for spec, facit_t in zip(TEMP_SENSORS, (25.45, 19.2)):
+        regs = regs_ph if spec["unit"] == 1 else regs_turb
+        varde = decode_register(regs[spec["addr"]], spec["scale"],
+                                spec["signed"])
+        ok = abs(varde - facit_t) < 1e-6
+        alla_ok = alla_ok and ok
+        print(f"  {spec['label']:<16} 0x{regs[spec['addr']]:04X} -> "
+              f"{varde:g} C  manualen sager {facit_t:g}  "
+              f"{'OK' if ok else 'FEL'}")
+    print(f"\n  {'Alla stammer.' if alla_ok else 'NAGOT STAMMER INTE.'}")
+
+    print("\nSignerad avkodning (ORP kan bli negativt)\n")
     print(f"  {'raatt':>8} {'signerat':>10} {'osignerat':>11}  register")
     checks = [
-        (0x0000, 100, True,  "temperatur 0x0000"),
-        (0xFF05, 100, True,  "temperatur 0x0000"),   # -2.51 C
-        (0xFFFF, 1000, True, "niva 0x0004"),
-        (0x0730, 100, False, "pH 0x0001"),
+        (0x095B, 10, "ORP 0x0002"),     # 239.5 mV, the manual's example
+        (0x0000, 10, "ORP 0x0002"),     # 0 mV
+        (0xFF83, 10, "ORP 0x0002"),     # -12.5 mV, water without oxygen
     ]
-    for raw, scale, signed, what in checks:
-        print(f"  {raw:8d} {decode_register(raw, scale, True):10.2f} "
-              f"{decode_register(raw, scale, False):11.2f}  {what}")
-    minus = decode_register(to_signed_example(-2.51, 100), 100, True)
-    print(f"\n  -2.51 C kodas och avkodas till {minus:+.2f}  "
-          f"{'OK' if abs(minus + 2.51) < 1e-9 else 'FEL'}")
-
-
-def to_signed_example(value, scale):
-    """Encode the way a sensor would, so the round trip can be checked."""
-    return int(round(value * scale)) & 0xFFFF
+    for raw, scale, what in checks:
+        print(f"  {raw:8d} {decode_register(raw, scale, True):10.1f} "
+              f"{decode_register(raw, scale, False):11.1f}  {what}")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 3,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -77,15 +77,14 @@
             "type": "influxdb",
             "uid": "limna-influx"
           },
-          "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"do\" or r._field == \"turb\" or r._field == \"ec\" or r._field == \"ph\" or r._field == \"temp_d\" or r._field == \"temp\" or r._field == \"lvl\" or r._field == \"batt\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])"
+          "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"ph\" or r._field == \"orp\" or r._field == \"turb\" or r._field == \"temp\" or r._field == \"batt\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])"
         }
       ]
     },
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Löst syre",
-      "description": "Larmgräns F-10: under 5,0 mg/L i 15 minuter.",
+      "title": "pH",
       "datasource": {
         "type": "influxdb",
         "uid": "limna-influx"
@@ -98,12 +97,15 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "suffix:mg/L",
+          "unit": "none",
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
             "showPoints": "auto",
-            "spanNulls": false
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
           },
           "thresholds": {
             "mode": "absolute",
@@ -114,7 +116,11 @@
               },
               {
                 "color": "green",
-                "value": 5
+                "value": 6
+              },
+              {
+                "color": "red",
+                "value": 9
               }
             ]
           }
@@ -139,15 +145,15 @@
             "type": "influxdb",
             "uid": "limna-influx"
           },
-          "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"do\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+          "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"ph\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
         }
-      ]
+      ],
+      "description": "Larmgräns F-10: utanför 6,0–9,0 i 15 minuter. PLACEHOLDER, sätts med bonden."
     },
     {
-      "id": 8,
+      "id": 3,
       "type": "timeseries",
-      "title": "pH",
-      "description": "Foljer syret over dygnet - bada drivs av fotosyntesen. En pH-kurva som slutar folja syrekurvan tyder pa att elektroden driver.",
+      "title": "Grumlighet",
       "datasource": {
         "type": "influxdb",
         "uid": "limna-influx"
@@ -160,80 +166,28 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "suffix: NTU",
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
             "showPoints": "auto",
-            "spanNulls": false
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "green",
                 "value": null
               },
               {
-                "color": "green",
-                "value": 6.5
-              },
-              {
                 "color": "red",
-                "value": 9.0
+                "value": 50
               }
             ]
-          },
-          "min": 6,
-          "max": 10
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "influxdb",
-            "uid": "limna-influx"
-          },
-          "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"ph\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "type": "timeseries",
-      "title": "Turbiditet",
-      "description": "Larm F-11 bygger på förändringstakten här, inte på en fast gräns.",
-      "datasource": {
-        "type": "influxdb",
-        "uid": "limna-influx"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 12
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "suffix:NTU",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "showPoints": "auto",
-            "spanNulls": false
           }
         },
         "overrides": []
@@ -258,13 +212,13 @@
           },
           "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"turb\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
         }
-      ]
+      ],
+      "description": "Larmgräns F-10: över 50 NTU i 30 minuter. Regn ger korta toppar. PLACEHOLDER, sätts med bonden."
     },
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Konduktivitet",
-      "description": "Sjunker vid regn samtidigt som turbiditeten stiger. Rör de sig tvärtom är det troligen ett sensorfel.",
+      "title": "ORP (redoxpotential)",
       "datasource": {
         "type": "influxdb",
         "uid": "limna-influx"
@@ -272,12 +226,12 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
+        "x": 0,
         "y": 12
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "suffix:µS/cm",
+          "unit": "suffix: mV",
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
@@ -305,9 +259,10 @@
             "type": "influxdb",
             "uid": "limna-influx"
           },
-          "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"ec\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+          "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"orp\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
         }
-      ]
+      ],
+      "description": "Lågt eller negativt ORP betyder syrefritt vatten. Ingen larmgräns än."
     },
     {
       "id": 5,
@@ -320,8 +275,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 20
+        "x": 12,
+        "y": 12
       },
       "fieldConfig": {
         "defaults": {
@@ -355,12 +310,13 @@
           },
           "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"temp\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
         }
-      ]
+      ],
+      "description": "Från grumlighetsgivarens Pt1000 (±0,3 °C)."
     },
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Vattennivå",
+      "title": "Termometrarnas skillnad",
       "datasource": {
         "type": "influxdb",
         "uid": "limna-influx"
@@ -368,17 +324,33 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
+        "x": 0,
         "y": 20
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "lengthm",
+          "unit": "celsius",
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
             "showPoints": "auto",
-            "spanNulls": false
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              }
+            ]
           }
         },
         "overrides": []
@@ -401,15 +373,15 @@
             "type": "influxdb",
             "uid": "limna-influx"
           },
-          "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"lvl\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+          "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"temp_d\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
         }
-      ]
+      ],
+      "description": "temp_d: största skillnaden mellan pH-givarens och grumlighetsgivarens termometer. Över 0,8 °C är mer än databladen tillåter tillsammans – en givare driver."
     },
     {
       "id": 7,
       "type": "timeseries",
       "title": "Batterispänning",
-      "description": "Larmgräns F-13: under 12,4 V. Styr ocksa energisparlaget F-02.",
       "datasource": {
         "type": "influxdb",
         "uid": "limna-influx"
@@ -417,8 +389,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 28
+        "x": 12,
+        "y": 20
       },
       "fieldConfig": {
         "defaults": {
@@ -427,7 +399,10 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "showPoints": "auto",
-            "spanNulls": false
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
           },
           "thresholds": {
             "mode": "absolute",
@@ -465,7 +440,8 @@
           },
           "query": "from(bucket: \"limna\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"limna\")\n  |> filter(fn: (r) => r._field == \"batt\")\n  |> filter(fn: (r) => r.boj =~ /^${boj:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
         }
-      ]
+      ],
+      "description": "Larmgräns F-13: under 12,4 V. Styr också energisparläget F-02."
     }
   ]
 }

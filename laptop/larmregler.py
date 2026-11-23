@@ -1,11 +1,12 @@
-"""Build the six LIMNA alert rules in Grafana via the provisioning API.
+"""Build the five LIMNA alert rules in Grafana via the provisioning API.
 
-Requirements covered: F-10 (fixed threshold), F-11 (rate of change),
-F-13 (silent sensor, low battery, thermometers disagreeing).
+Requirements covered: F-10 (fixed thresholds on pH and turbidity) and F-13
+(measurement gap, total silence, low battery).
 
-Six, counted from RULES below. This docstring said four and etapper.md said
-five until 2026-08-10; the file has had six since the old "Sensor svarar
-inte" rule was split into a measurement gap and a total silence.
+Five, counted from RULES below. A rate-of-change rule (F-11) belongs here
+too -- turbidity that climbs fast is rain runoff or a pump stirring the
+bottom, pH that climbs fast is a bloom starting -- once the farmer has said
+what "fast" means for that pond.
 
 SECOND LINE OF DEFENCE, NOT THE ONLY ONE
 ----------------------------------------
@@ -23,8 +24,9 @@ stay exactly as they are. The two do different jobs:
 
 If the buoy is wrong, the server still alarms. If the server is down, the
 measurement still went out early. Keep the numbers in the two places in
-step -- 'Lagt syre' below and "do" in alarm_limits are the same 5.0 mg/L,
-and 'Lagt batteri' and 'Temperaturgivarna oense' likewise.
+step -- 'pH utanfor granserna' below and "ph" in alarm_limits are the same
+6.0-9.0, 'Grumligt vatten' and "turb" the same 50 NTU, and 'Lagt batteri'
+likewise.
 """
 import json
 import os
@@ -205,6 +207,8 @@ def math(ref, expression):
 
 
 def threshold(ref, src, op, value):
+    """op is gt, lt, or outside_range -- the last takes value as (low, high)."""
+    params = list(value) if isinstance(value, (list, tuple)) else [value]
     return {
         "refId": ref,
         "queryType": "",
@@ -212,7 +216,7 @@ def threshold(ref, src, op, value):
         "datasourceUid": "__expr__",
         "model": {
             "type": "threshold", "refId": ref, "expression": src,
-            "conditions": [{"evaluator": {"type": op, "params": [value]}}],
+            "conditions": [{"evaluator": {"type": op, "params": params}}],
             "datasource": EXPR_DS,
         },
     }
@@ -231,31 +235,32 @@ def rule(title, krav, data, condition, for_, summary, no_data="NoData"):
         "orgID": 1,
         "isPaused": False,
         "annotations": {"summary": summary, "krav": krav},
-        "labels": {"boj": "HV-001", "krav": krav},
+        "labels": {"boj": "LIMNA-001", "krav": krav},
     }
 
 
 RULES = [
-    # F-10 - fixed limit. Oxygen below 5.0 mg/L sustained for 15 minutes.
-    rule("Lagt syre", "F-10",
-         [query("A", "do", 900, 0, "-15m", "now()"),
+    # F-10 - fixed limit. pH outside 6.0-9.0 sustained for 15 minutes. High
+    # is the usual direction in a pond: a bloom pulls the afternoon pH up.
+    rule("pH utanfor granserna", "F-10",
+         [query("A", "ph", 900, 0, "-15m", "now()"),
           reduce("B", "A", "last"),
-          threshold("C", "B", "lt", 5.0)],
+          threshold("C", "B", "outside_range", (6.0, 9.0))],
          "C", "15m",
-         "Loest syre under 5,0 mg/L i 15 minuter. Risk for fiskdod."),
+         "pH utanfor 6,0-9,0 i 15 minuter. Hogt pH tyder pa algblomning och "
+         "ger kalkavlagringar i droppbevattning. PLACEHOLDER-grans."),
 
-    # F-11 - rate of change. Turbidity up more than 200 % against a
-    # baseline window three hours back. Two queries, then math.
-    rule("Snabb turbiditetsokning", "F-11",
-         [query("A", "turb", 900, 0, "-15m", "now()"),
-          query("B", "turb", 10800, 9900, "-3h", "-2h45m"),
-          reduce("C", "A", "mean"),
-          reduce("D", "B", "mean"),
-          math("E", "($C - $D) / $D * 100"),
-          threshold("F", "E", "gt", 200.0)],
-         "F", "5m",
-         "Turbiditeten har okat mer an 200 procent pa tre timmar. "
-         "Tyder pa avrinning eller uppgrumling."),
+    # F-10 - fixed limit. Turbidity above 50 NTU. Thirty minutes rather than
+    # fifteen, because a rain shower gives a short peak that settles again
+    # by itself -- that is the pond working, not a problem to wake anybody
+    # for.
+    rule("Grumligt vatten", "F-10",
+         [query("A", "turb", 1800, 0, "-30m", "now()"),
+          reduce("B", "A", "last"),
+          threshold("C", "B", "gt", 50.0)],
+         "C", "30m",
+         "Grumlighet over 50 NTU i 30 minuter. Risk for igensatta filter och "
+         "droppare. PLACEHOLDER-grans."),
 
     # F-13 - THE BUOY STOPPED MEASURING.
     #
@@ -272,7 +277,10 @@ RULES = [
     # In development it will also fire when the laptop sleeps, because the
     # poller really does skip cycles then. That is the rule working.
     rule("Matningar saknas", "F-13",
-         [query_raw("A", flux_lucka("turb", "-6h"), 21600, 0),
+         # batt rather than a sensor field: it is in every stored
+         # measurement, so a gap here means the buoy did not measure at all,
+         # not that one sensor went quiet.
+         [query_raw("A", flux_lucka("batt", "-6h"), 21600, 0),
           reduce("B", "A", "max"),
           threshold("C", "B", "gt", float(GAP_S))],
          "C", "5m",
@@ -289,7 +297,7 @@ RULES = [
     # the server. Two eco-mode intervals plus an hour of margin is the
     # tightest honest value that does not cry wolf six times a day.
     rule("Bojen har inte hort av sig", "F-13",
-         [query_raw("A", flux_alder("turb", "-24h"), 86400, 0),
+         [query_raw("A", flux_alder("batt", "-24h"), 86400, 0),
           reduce("B", "A", "last"),
           threshold("C", "B", "gt", float(SILENCE_S))],
          "C", "10m",
@@ -306,21 +314,6 @@ RULES = [
          "C", "10m",
          "Batterispanningen under 12,4 V. Bojen gar snart i energisparlage."),
 
-    # F-13 - a sensor that drifts rather than fails. Four thermometers in the
-    # same water disagree by about 0.2 C from calibration error alone. Above
-    # 1.0 C sustained, one of them is walking away from the others, and that
-    # is a board going bad -- not weather, not stratification.
-    #
-    # This is the only rule here that catches a sensor which keeps answering
-    # and keeps looking plausible. It exists because the payload carries
-    # temp_d, the spread between the four.
-    rule("Temperaturgivarna oense", "F-13",
-         [query("A", "temp_d", 1800, 0, "-30m", "now()"),
-          reduce("B", "A", "mean"),
-          threshold("C", "B", "gt", 1.0)],
-         "C", "30m",
-         "Spridningen mellan de fyra temperaturgivarna over 1,0 C. "
-         "En givare driver. Kontrollera kalibreringen."),
 ]
 
 
@@ -344,6 +337,8 @@ def post(rule_body):
 UTGANGNA = {
     "Sensor svarar inte":
         "ersatt av 'Matningar saknas' + 'Bojen har inte hort av sig'",
+    "Lagt syre":
+        "syregivaren ar borttagen, ersatt av pH- och grumlighetsreglerna",
 }
 
 

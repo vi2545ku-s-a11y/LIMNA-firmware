@@ -3,14 +3,18 @@
 LIMNA - change the bus address of one sensor.
 
 Every sensor ships on a factory address and has to be moved to the address
-the buoy expects before anything else can work. Two pairs in this profile
-ship on the SAME address as each other, so this is not an optional tidying
-step: wire both in at once and neither can be reached.
+the buoy expects before anything else can work. Both sensors in the pond
+profile ship on address 1, so this is not an optional tidying step: wire both
+in at once and neither can be reached.
 
-    python3 set_address.py --list          what has to be moved, and where to
-    python3 set_address.py --scan          who is answering on the bus now
-    python3 set_address.py --sensor ec     move one sensor
-    python3 set_address.py --sensor ec --dry-run    say what it would write
+    python3 set_address.py --list            what has to be moved, and where to
+    python3 set_address.py --scan            who is answering on the bus now
+    python3 set_address.py --sensor turb     move one sensor
+    python3 set_address.py --sensor turb --dry-run    say what it would write
+
+The pH probe only takes its new address after a restart: write, cut its
+power, power it up again, then --scan. The turbidity probe's manual gives its
+factory address as both 1 and 50; --scan asks both.
 
 ONE SENSOR AT A TIME. Connect a single sensor, move it, disconnect it, then
 the next. The tool refuses to write while more than one device is answering,
@@ -23,8 +27,8 @@ Rehearse the whole thing without hardware:
 
 The simulated sensors really do change address, so a rehearsal that works is
 evidence the sequence is right -- not evidence that the register numbers are.
-Those come from the datasheets and are marked OVERIFIERAT until somebody has
-done this to a real sensor.
+Those come from the manufacturer's manuals (docs/datablad/) and have not yet
+been tried on a real sensor.
 
 Requires:  pip install pymodbus
 """
@@ -147,7 +151,10 @@ def scan(client):
     """
     kandidater = {}
     for spec in SPECS:
-        kandidater.setdefault(spec["factory_unit"], spec)
+        # Every address the manual says it might ship on -- the turbidity
+        # probe's manual gives two -- and the address we move it to.
+        for adress in spec["factory_candidates"]:
+            kandidater.setdefault(adress, spec)
         kandidater.setdefault(spec["unit"], spec)
 
     hittade = []
@@ -161,22 +168,26 @@ def scan(client):
 def cmd_list():
     print(f"Sensorprofil: {PROFILE['id']}  ({PROFILE['namn']})")
     print(f"Adressregistren ar {PROFILE['adressregister_status']}.\n")
-    print(f"  {'givare':<14} {'modell':<12} {'fran':>5} {'till':>5}  "
-          f"{'register':>8}  anmarkning")
+    print(f"  {'nyckel':<6} {'givare':<18} {'modell':<19} {'fran':>5} "
+          f"{'till':>5}  {'register':>8}  anmarkning")
     for spec in SPECS:
         krock = collides_with(spec)
         not_ = ""
         if krock:
             not_ = f"KROCKAR med {', '.join(krock)}"
-        print(f"  {spec['label']:<14} {spec['modell']:<12} "
+        print(f"  {spec['key']:<6} {spec['label']:<18} {spec['modell']:<19} "
               f"{spec['factory_unit']:>5} {spec['unit']:>5}  "
               f"0x{spec['address_register']:04X}  {not_}")
+        if spec["adressbyte_not"]:
+            print(f"  {'':<6} {spec['adressbyte_not']}")
+        if spec["matning"]:
+            print(f"  {'':<6} Matning: {spec['matning']}")
 
     kabel = [s for s in SPECS if s["kabel"]]
     if kabel:
         print("\n  Kabelvarningar\n")
         for spec in kabel:
-            print(f"    {spec['label']:<14} {spec['kabel']}")
+            print(f"    {spec['label']:<18} {spec['kabel']}")
 
     print("\n  Ordning: koppla in EN givare, flytta den, koppla ur den, "
           "ta nasta.")
@@ -204,7 +215,7 @@ def cmd_scan(cfg):
     print(f"  {'adress':>6}  formodad givare")
     for adress, spec in hittade:
         var = "driftadress" if adress == spec["unit"] else "fabriksadress"
-        print(f"  {adress:>6}  {spec['label']:<14} ({var})")
+        print(f"  {adress:>6}  {spec['label']:<18} ({var})")
 
     if len(hittade) > 1:
         print(f"\n  {len(hittade)} givare svarar. Koppla ur alla utom en "
@@ -238,7 +249,7 @@ def cmd_set(cfg, args):
           f"efterat\n")
 
     print(f"  VARNING: adressregistret ar {PROFILE['adressregister_status']}.")
-    print(f"  Databladen ger tre olika register for de fem givarna. "
+    print(f"  Varje givare har sitt eget adressregister. "
           f"Skriver du till")
     print(f"  fel register hander i basta fall ingenting, i varsta fall "
           f"staller du om")
@@ -252,6 +263,8 @@ def cmd_set(cfg, args):
 
     if spec["kabel"]:
         print(f"\n  Kabel: {spec['kabel']}")
+    if spec["adressbyte_not"]:
+        print(f"  Obs:   {spec['adressbyte_not']}")
 
     if args.dry_run:
         print("\n  TORRKORNING -- ingenting skrivs.")
@@ -341,7 +354,8 @@ def main():
     p.add_argument("--scan", action="store_true",
                    help="visa vilka adresser som svarar just nu")
     p.add_argument("--sensor", metavar="NYCKEL",
-                   help="givaren som ska flyttas (do, turb, ec, ph, lvl)")
+                   help=("givaren som ska flyttas ("
+                         + ", ".join(sp["key"] for sp in SPECS) + ")"))
     p.add_argument("--from", dest="from_addr", type=int, metavar="ADRESS",
                    help="adressen givaren star pa nu (standard: "
                         "fabriksadressen ur profilen)")
