@@ -53,7 +53,7 @@ make selftest
 Kör tre test i följd:
 
 1. **Profilen** (`delad/sensor_profiles.py`): registerkartan för pH, ORP och
-   grumlighet, de två termometrarna, strömkanaler, matning, fabriksadresser,
+   grumlighet, de två termometrarna, effekt, matning, fabriksadresser,
    kabelvarningar och kontrollen att simulatorn och pollaren ser samma karta.
 2. **Simulatorn** (`laptop/fake_sensors.py`): ett dygn i dammen, ett regn,
    uppvärmningen för pH och grumlighet, varifrån uppvärmningstiderna kommer,
@@ -72,7 +72,7 @@ Kör tre test i följd:
 - [x] Manualernas exempelsvar avkodas till manualernas värden: pH 7,83,
       ORP 239,5 mV, 98,5 NTU, 25,45 °C och 19,2 °C.
 - [x] Båda givarna krockar på fabriksadress 1.
-- [x] Nyttolasten är 187 byte.
+- [x] Nyttolasten är 152 byte.
 
 ---
 
@@ -182,11 +182,10 @@ python3 larmregler.py
 
 ## ETAPP 7 — Dashboarden 🚧
 
-Karta med bojens position, grafer med valbar period, batteri- och
-kommunikationsstatus, larmhistorik och CSV-export. Spara som JSON i
-`grafana/dashboards/limna.json`.
+Grafer med valbar period, batteri- och kommunikationsstatus, larmhistorik
+och CSV-export. Spara som JSON i `grafana/dashboards/limna.json`. Ingen
+karta: bojen ligger i en känd damm och skickar ingen position.
 
-- [ ] Positionen i `config.json` ersatt med dammens riktiga.
 - [ ] Panelerna för pH, grumlighet, ORP och `temp_d` visar data.
 
 ---

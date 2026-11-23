@@ -299,10 +299,6 @@ def default_faults():
     # Simulated algal bloom: pH and turbidity climb, ORP falls, hour by hour.
     # Used for alarm testing.
     faults["bloom"] = False
-    # The adaptive warm-up hypothesis, off by default. See the note next to
-    # cold_returns_zero below -- this makes the simulator PLAY the
-    # hypothesis, it does not make the hypothesis true.
-    faults["cold_returns_zero"] = False
     return faults
 
 
@@ -379,16 +375,6 @@ WARMUP_S = sensor_profiles.warmup_times(PROFILE)
 WARMUP_SOURCE = sensor_profiles.warmup_sources(PROFILE)
 WARMUP_LABEL = sensor_profiles.warmup_labels(PROFILE)
 
-# Which switched power channel each sensor hangs off (requirements E-11,
-# E-12). The turbidity probe is assumed ready in seconds and the pH probe
-# needs half a minute, so with two channels turbidity can be read and cut
-# while the electrodes are still settling. The grouping is a per-sensor
-# attribute in the profile; a second MOSFET means calling power_on() twice.
-#
-#   slow = pH/ORP, electrodes settling
-#   fast = turbidity
-POWER_RAIL = sensor_profiles.power_rails(PROFILE)
-
 
 class WarmupTracker:
     """Remembers when the sensor rail was last switched on.
@@ -407,17 +393,10 @@ class WarmupTracker:
     def __init__(self):
         self.powered_on_at = {}
 
-    def power_on(self, now, rail=None):
-        """Switch on one rail, or all of them when rail is None.
-
-        Today the poller always brings everything up at once, so rail stays
-        None. The argument exists so that a two-rail buoy can call
-        power_on(now, "fast") and power_on(now, "slow") at different moments
-        without this class changing.
-        """
+    def power_on(self, now):
+        """The sensor rail comes up: every sensor starts warming at once."""
         for unit in WARMUP_S:
-            if rail is None or POWER_RAIL[unit] == rail:
-                self.powered_on_at[unit] = now
+            self.powered_on_at[unit] = now
 
     def settle_fraction(self, unit, now):
         """1.0 = fully settled. Below 1.0 the reading is still drifting in."""
@@ -472,23 +451,9 @@ def build_unit(pond, warmup, unit, now, faults):
     if state == "offline":
         return None                        # unit simply absent
 
-    # THE ADAPTIVE WARM-UP HYPOTHESIS, playable on demand.
-    #
-    # Default behaviour is what the warm-up curves show: an unsettled sensor
-    # answers with a WRONG NUMBER, drifting in towards the truth. Set
-    # cold_returns_zero in faults.json and it instead answers 0 until it is
-    # settled, the way some sensors are documented to do.
-    #
-    # That switch exists so the poller's adaptive_warmup path can be
-    # exercised against both worlds. Which of the two our sensors
-    # actually live in is UNKNOWN, and running this simulator proves nothing
-    # about it -- it only does what this flag says.
+    # How far into its warm-up the sensor is. An unsettled sensor answers
+    # with a WRONG NUMBER, drifting in towards the truth -- see below.
     f = warmup.settle_fraction(unit, now)
-    if faults.get("cold_returns_zero") and f < 1.0:
-        regs = {spec["addr"]: 0 for spec in VALUE_SPECS[unit]}
-        if unit in TEMP_REGISTERS:
-            regs[TEMP_REGISTERS[unit][0]] = 0
-        return regs
 
     regs = {}
     for spec in VALUE_SPECS[unit]:
@@ -768,15 +733,7 @@ def main(factory=False):
     context = build_server_context(pond, warmup, factory=factory)
 
     def rail_power(connected):
-        """The poller opening the bus is the sensor rail being switched on.
-
-        With split_rail on, the poller opens one connection per power
-        channel, so each connection is that channel coming up. Powering every
-        unit here is still correct for that: the channels are switched on one
-        after the other, and the next connection restarts the clock for the
-        sensors that had not been read yet -- which is exactly what a second
-        MOSFET closing at that moment does.
-        """
+        """The poller opening the bus is the sensor rail being switched on."""
         if connected:
             warmup.power_on(time.time())
 

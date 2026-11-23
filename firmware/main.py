@@ -17,7 +17,7 @@ NOT YET IN THIS VERSION (later steps in firmware/README.md):
     deep sleep and RTC memory   step 4 -- the board stays awake for now
     battery ADC, MOSFET, WDT    step 4 -- batt is a fixed number from config
     stuck-value check           needs RTC memory to survive deep sleep
-    split rail, eco mode        follow once the hardware for them exists
+    eco mode (F-02)             follows with the battery ADC
 
 Stop it from the laptop with Ctrl+C (mpremote does this when it connects).
 """
@@ -34,7 +34,6 @@ import net
 DEFAULTS = {
     "buoy_id": "LIMNA-ESP32",
     "buoy_name": "ESP32 testkort",
-    "position": {"lat": 55.7047, "lon": 13.1910},
     "bus": "fake",                     # "fake" until the RS485 module is here
     "measure_interval_s": 60,
     "send_interval_s": 120,

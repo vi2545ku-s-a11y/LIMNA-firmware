@@ -1,1 +1,1 @@
-{"_comment": "Edit while running. Re-read on every request.", "sensor_1_ph": "ok", "sensor_2_turb": "offline", "_states": "ok | offline | stuck | noisy | drift", "rain_event": false, "bloom": false, "cold_returns_zero": false}
+{"_comment": "Edit while running. Re-read on every request.", "sensor_1_ph": "ok", "sensor_2_turb": "offline", "_states": "ok | offline | stuck | noisy | drift", "rain_event": false, "bloom": false}

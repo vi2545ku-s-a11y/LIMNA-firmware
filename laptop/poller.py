@@ -8,9 +8,6 @@ sequence is deliberately the same one the ESP32 will follow:
     power on the sensor rail  ->  wait out the warm-up  ->  read each sensor
     ->  cut power  ->  timestamp  ->  write to local storage  ->  try to send
 
-With split_rail on that first half runs once per power channel, fast group
-first, which is what requirements E-11 and E-12 ask for.
-
 Everything that is hard to get right lives here, not in the sensors:
 retries, partial failure, local buffering, catching up after an outage, and
 surviving a fault instead of dying of it. Those map to requirements EL-03,
@@ -50,11 +47,9 @@ DB_FILE = os.path.join(HERE, "buffer.db")
 sensor_profiles.use_config(CONFIG_FILE)
 
 DEFAULT_CONFIG = {
-    # The pond the buoy is tested in. Position is a placeholder near Lund
-    # until the pilot farm is chosen -- change it, the dashboard map uses it.
+    # Which buoy this is. The name is what the farmer sees in the dashboard.
     "buoy_id": "LIMNA-001",
     "buoy_name": "Bevattningsdamm test",
-    "position": {"lat": 55.7047, "lon": 13.1910},
 
     # WHICH BUS THE SENSORS HANG OFF.
     #
@@ -179,30 +174,11 @@ DEFAULT_CONFIG = {
         "range_check": True,
     },
 
-    # Read until the sensors answer instead of waiting a fixed time.
-    # OVERIFIERAT for these sensors -- read the comment above
-    # wait_until_valid() before turning this on. It must not be enabled
-    # against real hardware until somebody has watched what the registers
-    # contain during the first seconds after power-up.
-    "adaptive_warmup": False,
-    "adaptive_warmup_poll_s": 0.5,
-
     # How many measurements in a row a value may be bit-identical before it
     # is flagged as suspected frozen. 24 at the real 15 minute interval is
     # six hours; at the 60 s development interval it is twenty-four minutes,
     # which is short enough to actually test.
     "stuck_cycles": 24,
-
-    # Sensors that are only fitted sometimes, named by sensor id. A sensor
-    # marked "valfri" in the profile is left out unless it is listed here.
-    # The pond profile has none; empty is the normal buoy.
-    "optional_sensors": [],
-
-    # Two switched power channels instead of one (E-11, E-12). Default off:
-    # the buoy has one MOSFET today, and turning this on without the second
-    # one just measures the same sensors in a more complicated order. The
-    # poller reports what the split would save either way.
-    "split_rail": False,
 
     "_note": ("measure_interval_s is 60 here so you see results quickly. "
               "The real buoy uses 900 (15 min). warmup_s 30 is the pH "
@@ -221,7 +197,7 @@ DEFAULT_CONFIG = {
 # fault the profile exists to prevent.
 PROFILE = sensor_profiles.load_profile()
 
-# One row per measured VALUE: unit, key, label, addr, scale, signed, rail,
+# One row per measured VALUE: unit, key, label, addr, scale, signed,
 # warmup_s, range. The pH probe gives two rows, pH and ORP, with the same
 # unit -- it is one device answering for two quantities.
 SENSORS = sensor_profiles.value_specs(PROFILE)
@@ -245,309 +221,21 @@ TEMP_SENSORS = sensor_profiles.temp_specs(PROFILE)
 TEMP_PRIMARY_UNIT = sensor_profiles.temp_primary_unit(PROFILE)
 
 # ---------------------------------------------------------------------------
-# THE TWO POWER CHANNELS  (requirements E-11, E-12)
+# WHAT A MEASUREMENT COSTS IN ENERGY
 # ---------------------------------------------------------------------------
-# The turbidity probe is assumed ready in seconds; the pH probe's electrodes
-# need half a minute. Holding the turbidity probe powered for that half
-# minute only because the pH probe needs it is energy spent on nothing -- and
-# the turbidity probe is the hungrier of the two.
-#
-# With split_rail on, the fast channel is switched on, read and cut while the
-# slow one is still settling. Which sensor sits on which channel, and how long
-# each needs, are per-sensor attributes of the profile -- not constants here.
-#
-# Fast first, deliberately: it is the group that gets cut early, and cutting
-# it early is the entire point.
-RAIL_ORDER = ["fast", "slow"]
-RAIL_LABEL = {"fast": "snabb kanal", "slow": "langsam kanal",
-              None: "sensorrail"}
+# The sensor rail is on for the whole warm-up, and the warm-up is the largest
+# item in the buoy's energy budget. So every cycle logs how long the rail was
+# on and what that cost, from the datasheets' power figures. Both figures are
+# upper bounds, so the cost is too, until the currents are measured.
 
+def sensor_power_w():
+    """Total power of all sensors, counting each device once.
 
-def rails_in_profile():
-    """The channels this profile actually uses, fast one first."""
-    have = {spec["rail"] for spec in SENSORS}
-    known = [rail for rail in RAIL_ORDER if rail in have]
-    return known + sorted(have - set(RAIL_ORDER))
-
-
-def rail_members(rail):
-    """The values read on one channel. rail None means every channel at once."""
-    if rail is None:
-        return list(SENSORS)
-    return [spec for spec in SENSORS if spec["rail"] == rail]
-
-
-def rail_sensors(rail):
-    """The DEVICES on one channel, one row per bus address.
-
-    rail_members() gives one row per value, so the pH probe appears twice.
-    Anything that counts sensors or adds up their power has to use this
-    instead, or the pH probe is counted -- and its current drawn -- twice.
+    SENSORS has one row per VALUE, so the pH probe appears twice (pH and
+    ORP). Adding up every row would count its current twice.
     """
-    seen, out = set(), []
-    for spec in rail_members(rail):
-        if spec["unit"] not in seen:
-            seen.add(spec["unit"])
-            out.append(spec)
-    return out
-
-
-def rail_warmup(rail, cfg):
-    """How long this channel must stay powered before its sensors can be read.
-
-    The slowest sensor on the channel decides, because the channel is one
-    switch: nothing on it can be read until the worst of them has settled.
-
-    warmup_s in config.json is still respected as a ceiling. It is the whole
-    rail's assumed figure in undivided mode, and it doubles as the development
-    shortcut in the README -- set it to 5 while building and a split cycle
-    gets short too, instead of still taking 42 seconds.
-    """
-    if rail is None:
-        return cfg["warmup_s"]
-    return min(max(spec["warmup_s"] for spec in rail_members(rail)),
-               cfg["warmup_s"])
-
-
-# ---------------------------------------------------------------------------
-# ADAPTIVE WARM-UP  --  OVERIFIERAT, DEFAULT AV
-# ---------------------------------------------------------------------------
-# THE HYPOTHESIS: a sensor that has not settled yet answers with 0, or with
-# some other defined invalid value, rather than with a wrong number. If that
-# holds, the poller does not have to wait a fixed 60 seconds -- it can read
-# until the answer becomes valid and cut the power the moment it has one.
-# That would take the single largest item in the energy budget and turn it
-# from an assumption into a measurement.
-#
-# WHERE IT COMES FROM: some sensors are documented as returning 0 before
-# their warm-up time has passed. NOTHING says the Seeed pH/ORP probe or the
-# turbidity probe do the same. It is a clue about other products, nothing
-# more.
-#
-# WHY IT IS DANGEROUS IF WRONG: if a sensor instead answers with a value that
-# is merely unsettled -- which is exactly what our simulator does, and what
-# the warm-up curves in etapp 3 show -- then this accepts the first number it
-# sees. pH read at one second instead of thirty comes back far too low, looks
-# like a number, and would quietly become the whole dataset. The energy
-# saving would be real and the data would be worthless.
-#
-# THEREFORE: default off, and it must not be turned on against real hardware
-# until somebody has powered a sensor up with a meter on it and watched what
-# the register actually contains during the first seconds. Until then this is
-# a hypothesis with an implementation, not a feature.
-#
-# The simulator can play the hypothesis: set "cold_returns_zero": true in
-# faults.json and unsettled sensors answer 0. That exercises the mechanism.
-# It does not verify the hypothesis, because the simulator is only doing what
-# we told it to.
-
-def wait_until_valid(client, cfg, rail, log):
-    """Poll the channel's sensors until they answer, up to the fixed warm-up.
-
-    Returns the seconds actually waited. Falls back to the full warm-up if
-    the values never become valid, so a wrong hypothesis costs energy rather
-    than data.
-    """
-    granstid = rail_warmup(rail, cfg)
-    steg = cfg.get("adaptive_warmup_poll_s", 0.5)
-    started = time.time()
-    kvar = list(rail_members(rail))
-
-    while kvar and (time.time() - started) < granstid:
-        time.sleep(steg)
-        for spec in list(kvar):
-            raw, _ = read_raw(client, spec["unit"], spec["addr"], 1)
-            # 0 is the hypothesis' "not ready yet". A real reading of exactly
-            # zero is possible -- ORP crosses zero in water without oxygen,
-            # and clear water reads close to 0 NTU -- which is one more
-            # reason this needs verifying.
-            if raw not in (None, 0):
-                kvar.remove(spec)
-                log(f"    [adaptiv]  {spec['label']:<16} gav varde efter "
-                    f"{time.time() - started:.1f} s "
-                    f"(fast tid: {spec['warmup_s']:g} s)")
-
-    vantat = time.time() - started
-    if kvar:
-        namn = ", ".join(spec["label"] for spec in kvar)
-        log(f"    [adaptiv]  {namn} blev aldrig giltiga inom "
-            f"{granstid:g} s -- foll tillbaka pa fast tid")
-    else:
-        log(f"    [adaptiv]  hela kanalen klar pa {vantat:.1f} s av "
-            f"{granstid:g} s   OVERIFIERAT mot hardvara")
-    return vantat
-
-
-def rail_saving(cfg):
-    """What dividing the rail would save per measurement, from the profile.
-
-    Worked out rather than measured, so it can be reported WITHOUT running in
-    split mode. The decision on E-12 needs the figure before the hardware
-    exists, and the profile already knows every sensor's warm-up and power.
-
-    Two savings are counted separately, because they are not the same kind of
-    thing:
-
-        the split itself   the fast group stops being held on for the pH
-                           probe's sake. That is what the extra MOSFET buys
-                           and it does not go away.
-        the shorter wait   the slow group waits its own assumed time instead
-                           of the rail's. That comes from trusting a guess,
-                           not from any hardware change, and it vanishes the
-                           day the guess is measured and turns out longer.
-
-    A sensor with no published power figure would make every watt figure
-    here a lower bound; the result says which ones it left out, if any.
-    """
-    undivided = cfg["warmup_s"]
-    out = {}
-    for rail in rails_in_profile():
-        members = rail_sensors(rail)
-        warm = rail_warmup(rail, cfg)
-        saved_s = max(0.0, undivided - warm)
-        low = high = 0.0
-        okand = []
-        for spec in members:
-            effekt = spec["effekt_w"]
-            if effekt is None:
-                okand.append(spec["sensor_label"])
-            else:
-                low += effekt[0] * saved_s
-                high += effekt[1] * saved_s
-        out[rail] = {
-            "givare": len(members),
-            "uppvarmning_s": warm,
-            "sparad_tid_s": saved_s,
-            "givarsekunder": saved_s * len(members),
-            "wattsekunder": (low, high),
-            "okand_effekt": okand,
-        }
-    return out
-
-
-def energy_lines(cfg):
-    """Swedish log lines for what a divided rail is worth, per day."""
-    saving = rail_saving(cfg)
-    per_dygn = 86400 / cfg["measure_interval_s"]
-    if cfg.get("split_rail", False):
-        lines = ["Vad delningen sparar mot odelad rail, raknat ur profilen:"]
-    else:
-        lines = ["Vad en delad sensorrail SKULLE spara, raknat ur profilen:"]
-
-    for rail, s in saving.items():
-        lines.append(
-            f"  {RAIL_LABEL[rail]:<14} {s['givare']} givare  "
-            f"{cfg['warmup_s']:g} -> {s['uppvarmning_s']:g} s   "
-            f"{s['givarsekunder']:.0f} givarsekunder per matning")
-
-    low = sum(s["wattsekunder"][0] for s in saving.values())
-    high = sum(s["wattsekunder"][1] for s in saving.values())
-    lines.append(
-        f"  Vid nuvarande intervall ({per_dygn:.0f} matningar/dygn): "
-        f"{low * per_dygn / 3600:.1f}-{high * per_dygn / 3600:.1f} Wh/dygn")
-    if cfg["measure_interval_s"] != 900:
-        # The energy budget is written for the real 15 minute interval, so
-        # give that figure too or the two cannot be compared.
-        riktig = 86400 / 900
-        lines.append(
-            f"  Vid riktiga 15 min ({riktig:.0f} matningar): "
-            f"{low * riktig / 3600:.1f}-{high * riktig / 3600:.1f} Wh/dygn")
-
-    okanda = sorted({namn for s in saving.values()
-                     for namn in s["okand_effekt"]})
-    if okanda:
-        lines.append(f"  Utan {', '.join(okanda)}: effekten ar inte publicerad "
-                     f"och ingar inte.")
-    return lines
-
-
-def rail_power_w(rail):
-    """(lowest, highest) watts drawn by everything on one channel.
-
-    Sensors with no published figure contribute nothing, so this is a lower
-    bound -- rail_power_unknown() says which ones are missing.
-    """
-    low = high = 0.0
-    for spec in rail_sensors(rail):
-        if spec["effekt_w"] is not None:
-            low += spec["effekt_w"][0]
-            high += spec["effekt_w"][1]
-    return low, high
-
-
-def rail_power_unknown(rail):
-    return [spec["sensor_label"] for spec in rail_sensors(rail)
-            if spec["effekt_w"] is None]
-
-
-def log_rail_time(cfg, on_times, log):
-    """Log what each channel COST, in watt-seconds -- not just how long it ran.
-
-    Seconds are the wrong quantity to judge E-12 by: dividing the rail
-    shortens the cycle by a few seconds, but what it saves depends on how
-    much the fast group DRAWS while it would otherwise wait. A cycle time says
-    nothing about that. Watt-seconds do. (Both datasheets give upper bounds,
-    so this line is an upper bound too until the currents are measured.)
-
-    In undivided mode the line reports what the division WOULD have cost, so
-    the number is there when E-12 is decided -- without flipping the flag and
-    running for another day.
-    """
-    okanda = sorted({namn for rail in rails_in_profile()
-                     for namn in rail_power_unknown(rail)})
-    saknas = f"   (utan {', '.join(okanda)})" if okanda else ""
-
-    if None not in on_times:
-        delar = []
-        total_low = total_high = 0.0
-        for rail, on_time in on_times.items():
-            low, high = rail_power_w(rail)
-            total_low += low * on_time
-            total_high += high * on_time
-            delar.append(f"{RAIL_LABEL[rail]} {on_time:.1f} s x "
-                         f"{low:.2f}-{high:.2f} W")
-        log(f"  [rail]     {' | '.join(delar)}")
-        log(f"             totalt {sum(on_times.values()):.1f} s, "
-            f"{total_low:.0f}-{total_high:.0f} Ws per matning{saknas}")
-        return
-
-    # Undivided: everything is powered for the whole cycle.
-    total = on_times[None]
-    low, high = rail_power_w(None)
-    odelad_ws = (low * total, high * total)
-
-    # What the same measurement would have cost on two channels: each group
-    # powered only for its own warm-up, plus the reading time it shares.
-    lastid = max(0.0, total - cfg["warmup_s"])
-    delad_low = delad_high = 0.0
-    delad_tid = 0.0
-    for rail in rails_in_profile():
-        tid = rail_warmup(rail, cfg) + lastid / len(rails_in_profile())
-        r_low, r_high = rail_power_w(rail)
-        delad_low += r_low * tid
-        delad_high += r_high * tid
-        delad_tid += tid
-
-    log(f"  [rail]     odelad rail {total:.1f} s x {low:.2f}-{high:.2f} W = "
-        f"{odelad_ws[0]:.0f}-{odelad_ws[1]:.0f} Ws{saknas}")
-    if odelad_ws[1] > 0:
-        besparing = 100 * (1 - delad_high / odelad_ws[1])
-        log(f"             delad hade kostat "
-            f"{delad_low:.0f}-{delad_high:.0f} Ws pa {delad_tid:.0f} s "
-            f"-- {besparing:.0f} procent mindre energi")
-
-        # How much of that is the split, and how much is simply not waiting
-        # longer than the slowest sensor in the profile needs? The second half
-        # costs no hardware at all -- it is one line in config.json -- so
-        # keeping them apart stops the extra MOSFET being credited with a
-        # saving it did not make.
-        langsammast = max(spec["warmup_s"] for spec in SENSORS)
-        if langsammast < cfg["warmup_s"]:
-            kortare = langsammast + lastid
-            log(f"             odelad med {langsammast:g} s i stallet for "
-                f"{cfg['warmup_s']:g} s hade kostat "
-                f"{low * kortare:.0f}-{high * kortare:.0f} Ws "
-                f"-- delningen tar resten")
+    per_unit = {spec["unit"]: spec["effekt_w"] for spec in SENSORS}
+    return sum(w[1] for w in per_unit.values() if w is not None)
 
 
 def decode_register(raw, scale, signed):
@@ -749,18 +437,10 @@ def sample_sensor(client, spec, cfg, log):
     return varde, fel
 
 
-def read_thermometers(client, rail, retries, log):
-    """Read the thermometers that sit on one channel.
-
-    Split into "read" and "compare" because with a divided rail the
-    thermometers are not all powered at the same moment. The comparison can
-    only be made once both channels have been through.
-    """
+def read_thermometers(client, retries):
+    """Read every thermometer. Returns ({unit: degrees}, faults)."""
     readings, faults = {}, {}
-    on_rail = {spec["unit"] for spec in rail_members(rail)}
     for spec in TEMP_SENSORS:
-        if spec["unit"] not in on_rail:
-            continue
         raw, exc = read_raw(client, spec["unit"], spec["addr"], retries)
         if raw is None:
             faults[f"temp_{spec['unit']}"] = "no_response"
@@ -939,48 +619,36 @@ def open_client(cfg):
         f"Valjbara: \"tcp\" (simulatorn) eller \"rtu\" (riktiga givare).")
 
 
-def measure_rail(cfg, rail, log):
-    """Power one channel, wait it out, read its sensors, cut the power.
+def measure_cycle(cfg, log):
+    """One full measurement. Mirrors what the firmware does:
 
-    This is the sequence the firmware follows, for one MOSFET switch:
+        power on  ->  wait out the warm-up  ->  read  ->  power off
 
-        power on  ->  wait the channel's warm-up  ->  read  ->  power off
-
-    On the laptop, opening the Modbus connection IS the channel being powered
-    and closing it is the channel being cut -- that is what makes the
+    On the laptop, opening the Modbus connection IS the rail being powered
+    and closing it is the rail being cut -- that is what makes the
     simulator's warm-up honest. Cutting it happens in a finally, so a sensor
-    that throws halfway through does not leave the rail energised: on the buoy
-    that is not an untidy log line, it is a flat battery.
+    that throws halfway through does not leave the rail energised: on the
+    buoy that is not an untidy log line, it is a flat battery.
 
     OVER RTU THAT EQUIVALENCE STOPS BEING TRUE. Opening a serial port powers
     nothing. The two log lines below are where the MOSFET has to be switched
-    for real -- rail on before the warm-up starts, rail off in the finally --
-    and until that hook exists, "rtu" reads sensors that somebody else has
-    already given power to. The reading is real; the energy saving is not.
-
-    Returns (values, thermometer readings, faults, seconds the channel was on).
+    for real, and until that hook exists, "rtu" reads sensors that somebody
+    else has already given power to.
     """
     client = open_client(cfg)
     values, temps, faults = {}, {}, {}
     started = time.time()
 
-    log(f"  [ström på] {RAIL_LABEL[rail]}")
+    log("  [ström på] sensorrail")
     if not client.connect():
         log("  KAN INTE ANSLUTA till sensorbussen")
-        return values, temps, {"rail_" + (rail or "alla"): "no_connect"}, 0.0
+        return None
 
     try:
-        if cfg.get("adaptive_warmup", False):
-            # OVERIFIERAT -- see the long comment above wait_until_valid().
-            log(f"  [väntar]   adaptivt, hogst "
-                f"{rail_warmup(rail, cfg):g} s")
-            wait_until_valid(client, cfg, rail, log)
-        else:
-            warm = rail_warmup(rail, cfg)
-            log(f"  [väntar]   {warm:g} s uppvärmning")
-            time.sleep(warm)
+        log(f"  [väntar]   {cfg['warmup_s']:g} s uppvärmning")
+        time.sleep(cfg["warmup_s"])
 
-        for spec in rail_members(rail):
+        for spec in SENSORS:
             value, err = sample_sensor(client, spec, cfg, log)
             if err:
                 faults[spec["key"]] = err
@@ -992,44 +660,14 @@ def measure_rail(cfg, rail, log):
                 if err is None:
                     log(f"    {spec['label']:<16} {value}")
 
-        temps, temp_faults = read_thermometers(client, rail, cfg["retries"],
-                                               log)
+        temps, temp_faults = read_thermometers(client, cfg["retries"])
         faults.update(temp_faults)
     finally:
         client.close()
         on_time = time.time() - started
-        log(f"  [ström av] {RAIL_LABEL[rail]}  {on_time:.1f} s")
-
-    return values, temps, faults, on_time
-
-
-def measure_cycle(cfg, log):
-    """One full measurement. Mirrors what the firmware will do.
-
-    With split_rail off this is one channel carrying every sensor, which is
-    the buoy as it is built today. With it on, each channel is powered, read
-    and cut in turn -- fast group first, so the turbidity probe is off again
-    long before the pH probe has settled.
-    """
-    split = bool(cfg.get("split_rail", False))
-    rails = rails_in_profile() if split else [None]
-
-    values, temps, faults = {}, {}, {}
-    on_times = {}
-    for rail in rails:
-        rail_values, rail_temps, rail_faults, on_time = measure_rail(
-            cfg, rail, log)
-        values.update(rail_values)
-        temps.update(rail_temps)
-        faults.update(rail_faults)
-        on_times[rail] = on_time
-
-    # Back into profile order. A divided rail reads the fast group first, so
-    # without this the fields would come out in a different order than they
-    # do with one channel -- same bytes, but harder to compare two rows in
-    # the buffer by eye.
-    values = {spec["key"]: values[spec["key"]] for spec in SENSORS
-              if spec["key"] in values}
+        watt = sensor_power_w()
+        log(f"  [ström av] sensorrail  {on_time:.1f} s x {watt:.2f} W = "
+            f"{on_time * watt:.0f} Ws (databladens ovre granser)")
 
     temp, spread = compare_thermometers(temps, log)
     if temp is not None:
@@ -1052,8 +690,6 @@ def measure_cycle(cfg, log):
     for key, flagga in check_stuck(values, cfg, log).items():
         faults.setdefault(key, flagga)
 
-    log_rail_time(cfg, on_times, log)
-
     if not values:
         log("  INGEN sensor svarade. Ingen mätning sparas.")
         return None
@@ -1062,7 +698,6 @@ def measure_cycle(cfg, log):
         "boj": cfg["buoy_id"],
         "namn": cfg["buoy_name"],
         "t": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "pos": cfg["position"],
         "batt": read_battery(cfg),          # one ADC reading on the buoy
         **values,
     }
@@ -1420,7 +1055,7 @@ def main():
     print("LIMNA pollare")
     print(f"  Boj              {cfg['buoy_id']}  {cfg['buoy_name']}")
     print(f"  Sensorprofil     {PROFILE['id']}  "
-          f"({len(rail_sensors(None))} givare, {len(SENSORS)} matvarden, "
+          f"({len(sensor_profiles.sensors(PROFILE))} givare, {len(SENSORS)} matvarden, "
           f"{len(TEMP_SENSORS)} termometrar)")
     print(f"  Buss             {bus_description(cfg)}")
     print(f"  Matintervall     {cfg['measure_interval_s']} s")
@@ -1437,18 +1072,10 @@ def main():
     batt = cfg.get("battery", {})
     print(f"  Batteri          {read_battery(cfg)} V, kalla "
           f"{batt.get('source', 'fixed')}")
-    if cfg.get("split_rail", False):
-        kanaler = "  ".join(
-            f"{RAIL_LABEL[rail]} {rail_warmup(rail, cfg):g} s "
-            f"({len(rail_sensors(rail))} givare)"
-            for rail in rails_in_profile())
-        print(f"  Stromrail        DELAD -- {kanaler}")
-    else:
-        print("  Stromrail        odelad, en kanal for alla givare")
+    print(f"  Givareffekt      {sensor_power_w():.2f} W med railen pa "
+          f"(databladens ovre granser)")
     print(f"  Buffert          {total} matningar, {pending} oskickade")
     print(f"  Larmgranser      {limit_summary(cfg)}")
-    for line in energy_lines(cfg):
-        print(f"  {line}")
 
     # The trap documented in etapper.md, now with teeth: with the warm-up cut
     # short the sensors read low, and since 2026-08-10 the buoy acts on that
@@ -1557,11 +1184,11 @@ def selftest():
     print(f"Sensorprofil: {PROFILE['id']}")
     print(f"Buss:         {bus_description(DEFAULT_CONFIG)}\n")
     print(f"  {'adr':>3} {'falt':<5} {'register':>8} {'skala':>7} {'typ':<10} "
-          f"rail")
+          f"uppvarmning")
     for spec in SENSORS:
         typ = "signerad" if spec["signed"] else "osignerad"
         print(f"  {spec['unit']:>3} {spec['key']:<5} 0x{spec['addr']:04X} "
-              f"{spec['scale']:>9} {typ:<10} {spec['rail']}")
+              f"{spec['scale']:>9} {typ:<10} {spec['warmup_s']:g} s")
 
     # Does the simulator still read the same map as we do? Both build theirs
     # from sensor_profiles.py, so this only fails if somebody has written a
@@ -1606,7 +1233,6 @@ def selftest():
         "boj": DEFAULT_CONFIG["buoy_id"],
         "namn": DEFAULT_CONFIG["buoy_name"],
         "t": "2026-07-27T14:00:00+00:00",
-        "pos": DEFAULT_CONFIG["position"],
         "batt": 13.1,
         "ph": 7.83, "orp": 239.5, "turb": 6.4, "temp": 18.3, "temp_d": 0.25,
     }

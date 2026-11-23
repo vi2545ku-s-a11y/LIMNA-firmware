@@ -84,7 +84,7 @@ def thermometers(bus, temp_specs, primary_unit, retries=3):
 def build_payload(cfg, t, batt, values, temp, temp_d, faults):
     """The JSON line. Field names are fixed -- see CLAUDE.md before changing."""
     payload = {"boj": cfg["buoy_id"], "namn": cfg["buoy_name"], "t": t,
-               "pos": cfg["position"], "batt": batt}
+               "batt": batt}
     payload.update(values)
     if temp is not None:
         payload["temp"] = temp

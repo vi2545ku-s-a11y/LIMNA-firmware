@@ -87,7 +87,7 @@ python3 fake_sensors.py --selftest
 Eller, från roten: `make selftest`.
 
 Det första skriver ut registerkartan: vilka givare profilen innehåller, deras
-register och skalfaktorer, vilka register som *inte* läses, strömkanaler,
+register och skalfaktorer, vilka register som *inte* läses, effekt,
 effekt, fabriksadresser och kabelvarningar. Sist kontrollerar det att
 simulatorn och pollaren ser **samma** karta, och stannar med felmeddelande om
 de inte gör det.
@@ -351,9 +351,9 @@ tillbaka `"source": "fixed"` efteråt.
 
 ## Etapp 7 — Dashboarden
 
-Bygg panelerna som kravspecens kapitel 9 kräver: karta med bojens position,
-grafer med valbar tidsperiod, batteri- och kommunikationsstatus, larmhistorik
-och CSV-export.
+Bygg panelerna som kravspecens kapitel 9 kräver: grafer med valbar
+tidsperiod, batteri- och kommunikationsstatus, larmhistorik och CSV-export.
+Ingen karta: bojen ligger i en känd damm och skickar ingen position.
 
 Spara dashboarden som JSON och lägg den i versionshantering. Då är den
 återskapbar och inte något som bara finns i en container.
@@ -470,17 +470,6 @@ för laptopkörningen.
 avvika. Skriv in det uppmätta värdet i energibudgeten. Det talet styr den
 största enskilda posten i bojens energiförbrukning.
 
-**Titta samtidigt på vad registret innehåller under de första sekunderna.**
-Returnerar givaren `0` innan den är klar, eller ett värde som bara är fel?
-Frågan avgör om `"adaptive_warmup": true` går att använda: då läser pollaren
-tills värdet blir giltigt i stället för att vänta en fast tid. Flaggan finns
-i koden och är **avstängd**, eftersom svaret är okänt för just dessa givare.
-
-Risken med den, i simulering: med fel hypotes kortas cykeln från 30 till
-0,5 s och pH-värdet blir runt 45 procent för lågt.
-Det ser ut som en enorm energivinst och ger skräpdata. Slå inte på flaggan
-mot hårdvara förrän någon sett vad registret faktiskt innehåller.
-
 Ingen av tiderna är en uppmätt uppstartstid. pH-givarens 30 s är
 databladets **svarstid** för ORP — hur snabbt givaren följer en ändring när
 den väl är igång, inte hur lång tid det tar dit. Grumlighetsgivarens 10 s är
@@ -489,21 +478,9 @@ en ren gissning: dess datablad säger ingenting.
 Självtestet skriver ut varifrån varje tid kommer, så gissningarna syns för den
 som kör koden och inte bara för den som läser den.
 
-**Strömkanaler.** Grumlighetsgivaren antas klar på några sekunder,
-pH-givaren behöver en halv minut. Med två strömkanaler kan grumligheten läsas
-och stängas av medan pH-elektroden fortfarande sätter sig (krav E-11 och
-E-12). Grumlighetsgivaren är dessutom den som drar mest, 0,3 W mot högst
-0,12 W, så det är den som lönar sig att stänga av tidigt.
-
-**Mjukvaran är byggd, hårdvaran är det inte.** Sätt `"split_rail": true` i
-`config.json` så slår pollaren på snabba kanalen, väntar ut dess uppvärmning,
-läser grumligheten, stänger av, och gör sedan om det för pH-givaren. Rail-tillhörighet och uppvärmningstid står per givare i
-profilen. Den andra MOSFET:en finns dock inte i bojen ännu, så med en
-strömkanal mäter flaggan bara samma givare i en krångligare ordning.
-
-Pollaren skriver ut vad delningen skulle spara **även när flaggan är av**,
-räknat ur profilens uppvärmningstider och effekter — så beslutet kan fattas
-på en siffra utan att du först kör ett dygn i delat läge.
+**Energin per mätning** skrivs ut i varje cykel: hur länge railen var på
+gånger givarnas effekt ur databladen, till exempel `30.1 s x 0.42 W = 13 Ws`.
+Effekterna är databladens övre gränser och ska ersättas med uppmätta.
 
 Därefter portas logiken till ESP32. Strukturen är avsiktligt densamma:
 SQLite blir SD-kort, `time.sleep` blir djup sömn, och railen slås av på riktigt

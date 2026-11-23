@@ -67,13 +67,9 @@ WHAT TO VERIFY AGAINST THE DATASHEET BEFORE USING A NEW PROFILE
                 budget, so a guess goes in as "gissning" and a figure worked
                 out from something else as "harledd" -- never as a bare
                 number.
-    rail        which switched power channel the sensor hangs off. The fast
-                group can be read and cut while the slow group settles
-                (requirements E-11 and E-12).
     effekt_w    power draw as (lowest, highest) watts at the buoy's 12 V, or
-                None when the manufacturer does not publish one. Used only to
-                put a figure on what a split rail would save -- never to
-                decide anything on its own.
+                None when the manufacturer does not publish one. Used to log
+                what each measurement costs -- never to decide anything.
     skipped     registers the sensor offers that we deliberately do not read.
                 Written down so the next reader knows they were considered
                 and rejected, not missed.
@@ -106,8 +102,7 @@ HERE = _here()
 
 # WHICH config.json THIS FILE READS
 #
-# Only two things are asked of it: which profile is fitted, and which optional
-# sensors. But this file lives in delad/ and is shared with the firmware,
+# Only one thing is asked of it: which profile is fitted. But this file lives in delad/ and is shared with the firmware,
 # while config.json belongs to the program that runs -- laptop/config.json for
 # the rehearsal, and something else entirely on the buoy. Guessing "next to
 # myself" would look for delad/config.json, which nothing ever writes.
@@ -222,7 +217,6 @@ LIMNA_DAMM_2026 = {
             # Measure it.
             "warmup_s": 30.0,
             "warmup_source": "harledd",
-            "rail": "slow",
             # "Quiescent <8 mA at 12 V DC; measuring <10 mA at 12 V DC".
             # Upper bounds, so this is the most it draws, not what it draws.
             "effekt_w": (0.12, 0.12),
@@ -279,7 +273,6 @@ LIMNA_DAMM_2026 = {
             # it is marked as one. Measure it.
             "warmup_s": 10.0,
             "warmup_source": "gissning",
-            "rail": "fast",
             "effekt_w": (0.30, 0.30),
             "effekt_kalla": "datablad, 0,3 W vid 12 V",
             # The narrower of the two: below 12 V this sensor is outside its
@@ -326,22 +319,8 @@ def profile_name_from_config():
         return DEFAULT_PROFILE
 
 
-def optional_from_config():
-    """Which optional sensors config.json says are actually fitted."""
-    try:
-        with open(CONFIG_FILE) as fh:
-            return list(json.load(fh).get("optional_sensors", []))
-    except Exception:
-        return []
-
-
-def load_profile(name=None, optional=None):
-    """Return the named profile, or the one config.json points at.
-
-    Sensors marked "valfri" are left out unless their id is named in
-    optional_sensors. Use it for a sensor that is fitted for a trial and
-    taken off again afterwards: the buoy must run identically either way.
-    """
+def load_profile(name=None):
+    """Return the named profile, or the one config.json points at."""
     if name is None:
         name = profile_name_from_config()
     if name not in PROFILES:
@@ -349,22 +328,7 @@ def load_profile(name=None, optional=None):
             f"Okand sensorprofil '{name}'.\n"
             f"Valjbara profiler: {', '.join(sorted(PROFILES))}.\n"
             f"Andra 'sensor_profile' i config.json.")
-
-    profile = PROFILES[name]
-    if optional is None:
-        optional = optional_from_config()
-
-    valbara = {s["id"] for s in profile["sensors"] if s.get("valfri")}
-    okanda = set(optional) - valbara
-    if okanda:
-        raise SystemExit(
-            f"config.json ber om givaren {', '.join(sorted(okanda))}, "
-            f"men profilen {name} har ingen sadan valfri givare.\n"
-            f"Valbara: {', '.join(sorted(valbara)) or 'inga'}.")
-
-    monterade = [s for s in profile["sensors"]
-                 if not s.get("valfri") or s["id"] in optional]
-    return dict(profile, sensors=monterade)
+    return PROFILES[name]
 
 
 # ---------------------------------------------------------------------------
@@ -375,28 +339,17 @@ def load_profile(name=None, optional=None):
 # table above.
 
 def sensors(profile):
-    """Every FITTED sensor in the profile, in bus address order."""
+    """Every sensor in the profile, in bus address order."""
     return sorted(profile["sensors"], key=lambda s: s["unit"])
-
-
-def optional_sensors(name=None):
-    """{id: label} for the sensors a profile can be extended with.
-
-    Read from the unfiltered table, so it lists what could be fitted -- not
-    what is.
-    """
-    profile = PROFILES[name or profile_name_from_config()]
-    return {s["id"]: s["label"] for s in profile["sensors"]
-            if s.get("valfri")}
 
 
 def value_specs(profile):
     """One flat row per measured VALUE: what the poller reads for the payload.
 
     A sensor that reports two quantities gives two rows with the same unit.
-    The device-level fields (rail, warm-up, power) are repeated on each, so
+    The device-level fields (warm-up, power) are repeated on each, so
     anything that adds up power has to count each unit once -- poller.py's
-    rail_sensors() does that.
+    sensor_power_w() does that.
     """
     out = []
     for s in sensors(profile):
@@ -414,7 +367,6 @@ def value_specs(profile):
                 "resolution": 1.0 / v["scale"],
                 "range": v["range"],
                 "stuck_cycles": v.get("stuck_cycles"),
-                "rail": s["rail"],
                 "warmup_s": s["warmup_s"],
                 "warmup_source": s["warmup_source"],
                 "effekt_w": s.get("effekt_w"),
@@ -477,10 +429,6 @@ def warmup_sources(profile):
 
 def warmup_labels(profile):
     return {s["unit"]: s["kort"] for s in sensors(profile)}
-
-
-def power_rails(profile):
-    return {s["unit"]: s["rail"] for s in sensors(profile)}
 
 
 def power_watts(profile):
@@ -579,7 +527,6 @@ def _simulator_view():
         "temperaturregister": {u: tuple(v)
                                for u, v in fake_sensors.TEMP_REGISTERS.items()},
         "uppvarmningstid": dict(fake_sensors.WARMUP_S),
-        "strom-rail": dict(fake_sensors.POWER_RAIL),
         "temperaturkalla": fake_sensors.TEMP_SOURCE_UNIT,
     }
 
@@ -593,7 +540,6 @@ def _poller_view():
         "temperaturregister": {s["unit"]: (s["addr"], s["scale"], s["signed"])
                                for s in poller.TEMP_SENSORS},
         "uppvarmningstid": {s["unit"]: s["warmup_s"] for s in poller.SENSORS},
-        "strom-rail": {s["unit"]: s["rail"] for s in poller.SENSORS},
         "temperaturkalla": poller.TEMP_PRIMARY_UNIT,
     }
 
@@ -674,21 +620,11 @@ def selftest():
     print(f"  Buss: {s['baudrate']} baud {s['bytesize']}"
           f"{s['parity']}{s['stopbits']}")
 
-    valbara = optional_sensors()
-    if valbara:
-        monterade = {s["id"] for s in sensors(profile)}
-        print("\n  Valfria givare (monteras bara ibland)")
-        for key, label in sorted(valbara.items()):
-            status = ("MONTERAD" if key in monterade
-                      else f"ej monterad -- lagg '{key}' i optional_sensors")
-            print(f"    {key:<6} {label:<16} {status}")
-
     print("\nGivarna\n")
-    print(f"  {'adr':>3} {'givare':<18} {'modell':<19} {'rail':<5} "
-          f"uppvarmning")
+    print(f"  {'adr':>3} {'givare':<18} {'modell':<19} uppvarmning")
     for sensor in sensors(profile):
         print(f"  {sensor['unit']:>3} {sensor['label']:<18} "
-              f"{sensor['modell']:<19} {sensor['rail']:<5} "
+              f"{sensor['modell']:<19} "
               f"{sensor['warmup_s']:>4.0f} s  {sensor['warmup_source']}")
 
     print("\nRegisterkartan, ett falt per matvarde\n")
@@ -722,16 +658,7 @@ def selftest():
             print(f"  {sensor['unit']:>3} {sensor['kort']:<11} "
                   f"0x{addr:04X}  {vad:<18} {varfor}")
 
-    print("\n  Stromkanaler, effekt och matning\n")
-    for rail in ("fast", "slow"):
-        pa = [s for s in sensors(profile) if s["rail"] == rail]
-        if not pa:
-            continue
-        varmast = max(s["warmup_s"] for s in pa)
-        namn = ", ".join(s["label"] for s in pa)
-        print(f"  {rail:<5} {len(pa)} givare  klar efter {varmast:>4.0f} s   "
-              f"{namn}")
-    print()
+    print("\n  Effekt och matning\n")
     for sensor in sensors(profile):
         effekt = sensor.get("effekt_w")
         kalla = sensor.get("effekt_kalla", "ej angiven")

@@ -183,5 +183,5 @@ motsvarighet är en åldrande referenselektrod som driver.
   telegraf, dashboarden och larmreglerna. De ersatte `do` och `lvl`
   2026-11-23, när syre- och nivågivaren byttes mot Seeed-givarna.
 
-  Nyttolasten är **187 byte** med dammbojens fem mätvärden, uppmätt i
+  Nyttolasten är **152 byte** med dammbojens fem mätvärden, uppmätt i
   pollarens självtest.

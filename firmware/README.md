@@ -180,12 +180,11 @@ Alla tre är manualernas egna exempel. Svaren finns i `sensor_databla.md`.
 
 ## Mätcykeln, steg för steg
 
-Följ `measure_cycle()` och `measure_rail()` i `laptop/poller.py`. Kortfattat:
+Följ `measure_cycle()` i `laptop/poller.py`. Kortfattat:
 
 1. **Railen på.** GPIO för MOSFET:en hög. I steg 1–3 finns ingen MOSFET, då
    är detta bara en loggrad.
-2. **Uppvärmning.** `warmup_s` ur konfigurationen, i dag 30 s. Med
-   `split_rail` en kanal i taget, snabba kanalen först (`rail_warmup()`).
+2. **Uppvärmning.** `warmup_s` ur konfigurationen, i dag 30 s.
 3. **Läs varje givare tre gånger, ta medianen** (`sample_sensor()`). Flagga
    `brusig` om spridningen är stor och `out_of_range` om värdet ligger utanför
    profilens mätområde. Ett flaggat värde sparas ändå. Ett omöjligt tal är
@@ -216,13 +215,13 @@ larmreglerna och får inte ändras utan att fråga.
 
 ```json
 {"boj":"LIMNA-001","namn":"Bevattningsdamm test","t":"2026-07-27T14:00:00+00:00",
- "pos":{"lat":55.7047,"lon":13.191},"batt":13.1,"ph":7.83,"orp":239.5,"turb":6.4,
+ "batt":13.1,"ph":7.83,"orp":239.5,"turb":6.4,
  "temp":18.3,"temp_d":0.25}
 ```
 
 | Fält | Betyder |
 |---|---|
-| `boj`, `namn`, `pos` | ur konfigurationen |
+| `boj`, `namn` | ur konfigurationen |
 | `t` | tidsstämpel i UTC, ISO 8601, satt **i bojen** när mätningen gjordes |
 | `batt` | batterispänning, V |
 | `ph` | pH, kompenserat till 25 °C |
@@ -265,7 +264,7 @@ uppvakning; tomt eller trasigt betyder kallstart, och då börjar allt om.
 
 Ingen SQLite i MicroPython, och den behövs inte. K-04 kräver 30 dygn:
 
-    187 byte × 96 mätningar/dygn × 30 dygn ≈ 540 KB
+    152 byte × 96 mätningar/dygn × 30 dygn ≈ 440 KB
 
 En fil per dygn, en JSON-rad per mätning, och en liten fil med hur långt
 sändningen har kommit. Skriv mätningen och anropa `flush()` innan något
@@ -340,10 +339,9 @@ Givarna är inte levererade. Bygg så att det mesta går att testa ändå.
 ## Konfiguration på kortet
 
 En `config.json` på kortets filsystem, med samma nycklar som
-`laptop/config.json` där de gäller: `buoy_id`, `buoy_name`, `position`,
+`laptop/config.json` där de gäller: `buoy_id`, `buoy_name`,
 `sensor_profile`, `measure_interval_s`, `send_interval_s`, `warmup_s`,
-`retries`, `alarm_limits`, `eco_mode`, `stuck_cycles`, `split_rail`,
-`sampling`, `mqtt`. Lägg till `wifi` (SSID och lösenord) och `pins` om
+`retries`, `alarm_limits`, `eco_mode`, `stuck_cycles`, `sampling`, `mqtt`. Lägg till `wifi` (SSID och lösenord) och `pins` om
 pinnarna ska gå att ändra utan ny kod.
 
 ---
@@ -370,8 +368,6 @@ pinnarna ska gå att ändra utan ny kod.
   behöver flyttas.
 - Förvara pH-elektroden i 3 M KCl eller med skyddet på när bojen är upptagen
   över vintern. Den förstörs av att torka ut.
-- `adaptive_warmup` ska vara av. Den bygger på en obekräftad hypotes, se
-  kommentaren i `poller.py`.
 
 ---
 

@@ -27,7 +27,7 @@ import measure                                          # noqa: E402
 from buffer import Buffer                               # noqa: E402
 from fakebus import FakeBus                             # noqa: E402
 
-PROFILE = sensor_profiles.load_profile("limna-damm-2026", optional=[])
+PROFILE = sensor_profiles.load_profile("limna-damm-2026")
 SPECS = sensor_profiles.value_specs(PROFILE)
 TEMPS = sensor_profiles.temp_specs(PROFILE)
 PRIMARY = sensor_profiles.temp_primary_unit(PROFILE)
@@ -156,12 +156,11 @@ class SimulatedSensors(unittest.TestCase):
         now[0] += 31
         values = {s["key"]: measure.sample(bus, s)[0] for s in SPECS}
         temp, temp_d, faults = measure.thermometers(bus, TEMPS, PRIMARY)
-        cfg = {"buoy_id": "LIMNA-ESP32", "buoy_name": "t",
-               "position": {"lat": 0, "lon": 0}}
+        cfg = {"buoy_id": "LIMNA-ESP32", "buoy_name": "t"}
         p = measure.build_payload(cfg, "2026-11-23T10:00:00+00:00", 13.1,
                                   values, temp, temp_d, faults)
         self.assertEqual(sorted(k for k in p if k not in
-                                ("boj", "namn", "t", "pos")),
+                                ("boj", "namn", "t")),
                          ["batt", "orp", "ph", "temp", "temp_d", "turb"])
         # The two simulated offsets differ by 0.25 C. The turbidity probe's
         # register counts tenths, so rounding can move the gap by 0.05.
