@@ -96,4 +96,4 @@ MPREMOTE ?= $(shell command -v mpremote || echo $(HOME)/Library/Python/3.14/bin/
 esp32:
 	$(MPREMOTE) connect $(PORT) cp delad/sensor_profiles.py firmware/modbus.py \
 		firmware/fakebus.py firmware/buffer.py firmware/measure.py \
-		firmware/net.py firmware/main.py : + reset
+		firmware/net.py firmware/led.py firmware/main.py : + reset

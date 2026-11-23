@@ -30,6 +30,7 @@ import sensor_profiles
 from buffer import Buffer
 import measure
 import net
+from led import Led
 
 DEFAULTS = {
     "buoy_id": "LIMNA-ESP32",
@@ -43,6 +44,7 @@ DEFAULTS = {
     "battery_v": 13.1,                 # no ADC yet (step 4)
     "utc_offset_h": 1,                 # only the simulated pond's daylight
     "pins": {"uart": 1, "tx": 17, "rx": 18, "de": 16, "re": 15},
+    "led": True,                       # colour cycle while waiting
     # The same placeholders as laptop/poller.py. Set with the farmer.
     "alarm_limits": {"ph": {"low": 6.0, "high": 9.0},
                      "turb": {"low": None, "high": 50.0},
@@ -129,6 +131,7 @@ def main():
     primary = sensor_profiles.temp_primary_unit(profile)
     bus = make_bus(cfg, profile, specs, temps)
     buf = Buffer()
+    led = Led(enabled=cfg["led"])
 
     print("LIMNA firmware")
     print("  Boj           %s  %s" % (cfg["buoy_id"], cfg["buoy_name"]))
@@ -174,7 +177,7 @@ def main():
             sys.print_exception(exc)
         wait = max(0, cfg["measure_interval_s"] - (time.time() - started))
         print("  [sover]    %d s\n" % wait)
-        time.sleep(wait)
+        led.cycle(wait)                 # red, green, blue while waiting
 
 
 main()

@@ -20,6 +20,7 @@ testat mot manualernas ramar, men inte mot riktiga givare.
 | `net.py` | WiFi, NTP och MQTT. Den enda filen som byts när WiFi blir LoRa eller LTE-M |
 | `modbus.py` | Modbus RTU för hand: ramar, CRC, `RTUBus` för UART och DE/RE. **Ej provad mot hårdvara** |
 | `fakebus.py` | simulerade givare med samma `read()` som `RTUBus`, inklusive fel värde före uppvärmningen |
+| `led.py` | RGB-lysdioden på GPIO 38: växlar rött, grönt och blått medan kortet väntar. Lysdioden har rött och grönt omkastat, vilket hanteras här. Stängs av med `"led": false` |
 | `test_firmware.py` | tester på laptopen, mot bytena i manualerna i `docs/datablad/` |
 
 `delad/sensor_profiles.py` kopieras **oförändrad** till kortet. Den klarar
