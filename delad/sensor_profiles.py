@@ -88,7 +88,21 @@ import json
 import os
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+def _here():
+    """The folder this file sits in, or "" on the buoy.
+
+    MicroPython has no os.path. On the ESP32 this file is copied to the root
+    of the board's filesystem, next to config.json, so "" -- the current
+    folder -- is the right answer there. Solved here rather than in a copy
+    of this file, because a copy is exactly what this file exists to prevent.
+    """
+    try:
+        return os.path.dirname(os.path.abspath(__file__))
+    except (AttributeError, NameError):
+        return ""
+
+
+HERE = _here()
 
 # WHICH config.json THIS FILE READS
 #
@@ -101,7 +115,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # So the caller says. poller.py and fake_sensors.py both call use_config()
 # before loading a profile. The default below only matters when this file is
 # run on its own, as its own self test.
-CONFIG_FILE = os.path.join(HERE, "config.json")
+CONFIG_FILE = (HERE + "/" if HERE else "") + "config.json"
 
 
 def use_config(path):

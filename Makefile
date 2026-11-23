@@ -12,7 +12,7 @@
 # Simulatorn och pollaren ska koras i VAR SITT fonster, precis som i README.
 # Darfor finns "make sim" och "make poll" som separata mal.
 
-.PHONY: help install selftest up down sim poll factory status clean
+.PHONY: help install selftest up down sim poll factory status clean fwtest esp32
 
 help:
 	@echo "LIMNA"
@@ -25,6 +25,8 @@ help:
 	@echo "  make factory    etapp 8: simulator pa FABRIKSADRESSER, for att"
 	@echo "                  ova adressbytet med set_address.py"
 	@echo "  make status     visa vad som kor just nu"
+	@echo "  make fwtest     firmwarens tester, pa laptopen (ingen hardvara)"
+	@echo "  make esp32      kopiera firmwaren till ESP32:n och starta om den"
 	@echo "  make down       stoppa dataplattformen"
 	@echo "  make clean      radera buffer.db, config.json, faults.json"
 	@echo ""
@@ -81,3 +83,17 @@ status:
 clean:
 	rm -f laptop/buffer.db laptop/buffer.db-journal laptop/config.json laptop/faults.json
 	@echo "Lokala filer raderade. De skapas pa nytt vid nasta korning."
+
+# Firmwarens rena Python-delar, testade mot manualernas exempelramar.
+fwtest:
+	cd firmware && python3 -m unittest -v test_firmware
+
+# Kopierar profilen (samma fil som laptopen laser, ingen kopia i repot) och
+# firmwaren till kortet, och startar om det. config.json pa kortet, med
+# WiFi-losenordet, ror den inte. Byt port med:  make esp32 PORT=/dev/cu.xxx
+PORT ?= /dev/cu.usbmodem1101
+MPREMOTE ?= $(shell command -v mpremote || echo $(HOME)/Library/Python/3.14/bin/mpremote)
+esp32:
+	$(MPREMOTE) connect $(PORT) cp delad/sensor_profiles.py firmware/modbus.py \
+		firmware/fakebus.py firmware/buffer.py firmware/measure.py \
+		firmware/net.py firmware/main.py : + reset

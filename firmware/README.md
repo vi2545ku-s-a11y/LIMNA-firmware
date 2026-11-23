@@ -1,9 +1,62 @@
 # firmware/ — ESP32-koden för LIMNA-bojen
 
-**Ännu inte påbörjad.** Den här filen är specifikationen som firmwaren ska
-skrivas efter. Koden i `laptop/` är utkastet: `poller.py` gör redan allt
-bojen ska göra, men på en laptop mot simulerade givare. Firmwaren är samma
-logik flyttad till en ESP32.
+Den här filen är specifikationen som firmwaren skrivs efter. Koden i
+`laptop/` är utkastet: `poller.py` gör allt bojen ska göra, men på en laptop
+mot simulerade givare. Firmwaren är samma logik flyttad till en ESP32.
+
+## Läget 2026-11-23
+
+**Steg 2 kör på kortet, med simulerade givare.** Kortet mäter varje minut,
+sparar i sitt eget minne, skickar över WiFi till Mosquitto på laptopen och
+syns i Grafana som bojen `LIMNA-ESP32`. Det startar av sig självt vid
+strömpåslag. Steg 1 väntar på RS485-modulen: Modbus-lagret är skrivet och
+testat mot manualernas ramar, men inte mot riktiga givare.
+
+| Fil | Gör |
+|---|---|
+| `main.py` | mätcykeln. MicroPython kör den vid strömpåslag |
+| `measure.py` | avkodning, median av tre, flaggor, nyttolast, larmgränser (F-12) |
+| `buffer.py` | en fil per dygn i `matningar/`, markeras skickad först när brokern bekräftat (K-03) |
+| `net.py` | WiFi, NTP och MQTT. Den enda filen som byts när WiFi blir LoRa eller LTE-M |
+| `modbus.py` | Modbus RTU för hand: ramar, CRC, `RTUBus` för UART och DE/RE. **Ej provad mot hårdvara** |
+| `fakebus.py` | simulerade givare med samma `read()` som `RTUBus`, inklusive fel värde före uppvärmningen |
+| `test_firmware.py` | tester på laptopen, mot bytena i manualerna i `docs/datablad/` |
+
+`delad/sensor_profiles.py` kopieras **oförändrad** till kortet. Den klarar
+MicroPython sedan den fick en ersättning för `os.path`.
+
+    make fwtest      testerna, på laptopen
+    make esp32       kopiera allt till kortet och starta om det
+
+`config.json` på kortet har WiFi och MQTT och versionshanteras **aldrig**:
+
+```json
+{"buoy_id": "LIMNA-ESP32", "buoy_name": "ESP32 testkort",
+ "wifi": {"ssid": "...", "password": "..."},
+ "mqtt": {"host": "172.20.10.8", "port": 1883,
+          "topic": "limna/LIMNA-ESP32/measurements"}}
+```
+
+Allt annat har standardvärden i `main.py` (`DEFAULTS`). `"bus": "rtu"` byter
+till den riktiga bussen när RS485-modulen sitter på plats.
+
+**Saknas än** (steg 4): djupsömn och RTC-minne, batteri-ADC, MOSFET för
+railen, watchdog och kontrollen av fastfrusna värden. Kortet är vaket hela
+tiden och drar full ström.
+
+**Tre fällor som redan har bitit:**
+
+- Datamappen får inte heta `buffer`. MicroPython importerar då mappen
+  `buffer/` i stället för filen `buffer.py`, och `main.py` stannar vid
+  andra starten. Den heter `matningar/`.
+- Öppna inte kortets USB-port med ett eget pyserial-skript. Det sätter
+  styrlinjerna så att chipet fastnar i återställning eller nedladdningsläge,
+  och `main.py` startar inte. Använd `mpremote`.
+- **Eduroam går inte.** Det kräver personlig inloggning (WPA2-Enterprise),
+  som MicroPython inte stöder, och universitetsnät brukar hindra enheter
+  från att nå varandra. Använd mobilens hotspot under utveckling, med
+  Maximera kompatibilitet påslaget så att den går på 2,4 GHz. `LU IoT` är
+  troligen rätt nät på campus, efter att kortets MAC-adress registrerats.
 
 Läs `CLAUDE.md` i roten först. Den förklarar varför koden ser ut som den gör.
 
@@ -44,7 +97,7 @@ inte av processorn.
 
 | Del | Val |
 |---|---|
-| Styrkort | Waveshare ESP32-S3-DEV-KIT-N32R16V-M (ESP32-S3-WROOM-1-N32R16, 32 MB flash, 16 MB OPI-PSRAM) |
+| Styrkort | Waveshare ESP32-S3-DEV-KIT-N32R16V-M (ESP32-S3-WROOM-2-N32R16V: 32 MB **oktal** flash och 16 MB oktal PSRAM, båda 1,8 V). Avläst med `esptool flash-id` 2026-11-23 |
 | RS485 | SP3485-modul, 3,3 V, separata DE- och RE-pinnar |
 | pH/ORP-givare | Seeed S-pH&ORP-01A, adress 1 |
 | Grumlighetsgivare | Seeed S-DTS210-01, adress 2 |
@@ -302,7 +355,14 @@ pinnarna ska gå att ändra utan ny kod.
   saknas — gör aldrig en egen kopia av profilen.
 - `dict(profile, sensors=...)` i `load_profile()`: kontrollera att den
   fungerar i MicroPython-versionen ni flashar.
-- Bygg MicroPython för N32R16-modulen med OPI-PSRAM, annars startar kortet inte.
+- Använd MicroPythons **SPIRAM_OCT**-bygge för ESP32_GENERIC_S3. Provat
+  2026-11-23: `ESP32_GENERIC_S3-SPIRAM_OCT-20260824-v1.29.0.bin` startar på
+  kortet trots den oktala flashen, ser alla 32 MB flash och ger ca 16,6 MB
+  fritt RAM. Standardbygget utan SPIRAM_OCT använder inte PSRAM:et.
+  Flashas med `esptool --chip esp32s3 erase-flash`, sedan
+  `esptool --chip esp32s3 --baud 460800 write-flash 0 <fil>.bin`.
+- Kortet syns som två portar på Mac. `/dev/cu.usbmodem1101` (chipets egen
+  USB) är den som används för flashning och för MicroPythons prompt.
 - Båda givarna kan levereras på **adress 1**. Flytta grumlighetsgivaren till
   2 ensam innan pH-givaren kopplas in (`laptop/set_address.py --sensor turb`
   över USB–RS485). Svarar den inte på 1, prova 50.

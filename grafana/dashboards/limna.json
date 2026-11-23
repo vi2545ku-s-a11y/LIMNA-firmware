@@ -6,7 +6,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -123,7 +123,8 @@
                 "value": 9
               }
             ]
-          }
+          },
+          "displayName": "${__field.labels.boj}"
         },
         "overrides": []
       },
@@ -131,10 +132,10 @@
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": false
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -188,7 +189,8 @@
                 "value": 50
               }
             ]
-          }
+          },
+          "displayName": "${__field.labels.boj}"
         },
         "overrides": []
       },
@@ -196,10 +198,10 @@
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": false
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -237,7 +239,8 @@
             "fillOpacity": 10,
             "showPoints": "auto",
             "spanNulls": false
-          }
+          },
+          "displayName": "${__field.labels.boj}"
         },
         "overrides": []
       },
@@ -245,10 +248,10 @@
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": false
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -286,7 +289,8 @@
             "fillOpacity": 10,
             "showPoints": "auto",
             "spanNulls": false
-          }
+          },
+          "displayName": "${__field.labels.boj}"
         },
         "overrides": []
       },
@@ -294,10 +298,10 @@
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": false
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -351,7 +355,8 @@
                 "value": 0.8
               }
             ]
-          }
+          },
+          "displayName": "${__field.labels.boj}"
         },
         "overrides": []
       },
@@ -359,10 +364,10 @@
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": false
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -416,7 +421,8 @@
                 "value": 12.4
               }
             ]
-          }
+          },
+          "displayName": "${__field.labels.boj}"
         },
         "overrides": []
       },
@@ -424,10 +430,10 @@
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": false
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
